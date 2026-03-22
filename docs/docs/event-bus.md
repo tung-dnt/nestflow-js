@@ -1,313 +1,230 @@
-# Event Bus
+# Adapters & TransitResult
 
-The event bus module provides integration with message brokers for event-driven workflows.
-
-## Installation
-
-```typescript
-import { IBrokerPublisher, SqsEmitter } from 'nestjs-serverless-workflow/event-bus';
-```
+Adapters consume the `TransitResult` returned by `OrchestratorService.transit()` and decide how to drive the workflow forward. The library ships with a durable Lambda adapter and exposes the interfaces needed to build your own.
 
 ## Core Concepts
 
 ### Workflow Events
 
-Events are the messages that trigger workflow transitions:
+Events trigger workflow transitions. The `IWorkflowEvent` interface lives in `nestjs-serverless-workflow/core`:
 
 ```typescript
-export interface IWorkflowEvent<T = any> {
-  topic: string;        // Topic for message segregation
-  urn: string | number; // Unique identifier for the entity (can be used as group ID)
+import type { IWorkflowEvent } from 'nestjs-serverless-workflow/core';
+
+// Shape of a workflow event
+interface IWorkflowEvent<T = any> {
+  event: string;           // Event name that triggers a transition
+  urn: string | number;    // Unique identifier for the entity
   payload?: T | object | string; // Optional event data
-  attempt: number;     // Retry attempt number
+  attempt: number;         // Retry attempt number
 }
 ```
 
-### Broker Publisher
+### TransitResult
 
-The `IBrokerPublisher` interface defines how events are published:
+Every call to `orchestrator.transit(event)` returns a `TransitResult`:
 
 ```typescript
-export interface IBrokerPublisher {
-  emit<T>(payload: IWorkflowEvent<T>): Promise<void>;
-}
+type TransitResult =
+  | { status: 'final'; state: string | number }
+  | { status: 'idle'; state: string | number }
+  | { status: 'continued'; nextEvent: IWorkflowEvent }
+  | { status: 'no_transition'; state: string | number };
 ```
 
-## SQS Integration
+Adapters read this result and react accordingly:
+
+| Status | Adapter action |
+|--------|---------------|
+| `final` | Workflow is done — return the result. |
+| `idle` | Wait for an external event (e.g., a callback). |
+| `continued` | Feed `nextEvent` back into `transit()` to continue processing. |
+| `no_transition` | No unambiguous auto-transition — wait for an explicit event. |
+
+## DurableLambdaEventHandler
+
+The built-in adapter for AWS Lambda with the Durable Execution SDK. It runs the entire workflow lifecycle inside a single durable execution, checkpointing at each step.
 
 ### Setup
 
-1. Install the AWS SDK:
+```typescript
+import { NestFactory } from '@nestjs/core';
+import { DurableLambdaEventHandler } from 'nestjs-serverless-workflow/adapter';
+import { withDurableExecution } from '@aws/durable-execution-sdk-js';
+import { AppModule } from './app.module';
 
-```bash
-npm install @aws-sdk/client-sqs
+const app = await NestFactory.createApplicationContext(AppModule);
+export const handler = DurableLambdaEventHandler(app, withDurableExecution);
 ```
 
-2. Create an SQS emitter:
+### How It Works
+
+The adapter loops over `transit()` calls, reacting to each `TransitResult`:
+
+1. **`continued`** — Checkpoints the next event via `ctx.step()`, then calls `transit()` again with `nextEvent`.
+2. **`idle`** — Pauses via `ctx.waitForCallback()`. An external system resumes the workflow by calling the Lambda `SendDurableExecutionCallbackSuccess` API.
+3. **`no_transition`** — Also pauses via `ctx.waitForCallback()`, waiting for an explicit event from an external system.
+4. **`final`** — Returns the completed result, ending the durable execution.
+
+### Event Shape
+
+The durable adapter expects a `DurableWorkflowEvent`:
 
 ```typescript
-import { SqsEmitter } from 'nestjs-serverless-workflow/event-bus';
-import { Injectable } from '@nestjs/common';
-import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
-import { IWorkflowEvent } from 'nestjs-serverless-workflow/event-bus';
-
-@Injectable()
-export class MySqsEmitter extends SqsEmitter {
-  private client: SQSClient;
-  private queueUrl: string;
-
-  constructor() {
-    super();
-    this.client = new SQSClient({ region: 'us-east-1' });
-    this.queueUrl = process.env.SQS_QUEUE_URL!;
-  }
-
-  async emit<T>(payload: IWorkflowEvent<T>): Promise<void> {
-    await this.client.send(
-      new SendMessageCommand({
-        QueueUrl: this.queueUrl,
-        MessageBody: JSON.stringify(payload),
-        MessageGroupId: payload.urn.toString(), // For FIFO queues
-      })
-    );
-  }
+interface DurableWorkflowEvent {
+  urn: string | number;
+  initialEvent: string;
+  payload?: any;
 }
 ```
 
-3. Register the broker:
+And returns a `DurableWorkflowResult`:
 
 ```typescript
-import { WorkflowModule } from 'nestjs-serverless-workflow/core';
-import { MySqsEmitter } from './sqs.emitter';
+interface DurableWorkflowResult {
+  urn: string | number;
+  status: string;
+  state: string | number;
+}
+```
 
-@Module({
+## IDurableContext
+
+The `IDurableContext` interface abstracts the durable execution runtime. The real implementation comes from `@aws/durable-execution-sdk-js`, but the interface is exported so you can mock it in tests.
+
+```typescript
+import type { IDurableContext } from 'nestjs-serverless-workflow/adapter';
+
+interface IDurableContext {
+  step<T>(name: string, fn: () => Promise<T>): Promise<T>;
+  waitForCallback<T>(
+    name: string,
+    onRegister: (callbackId: string) => Promise<void>,
+    options?: { timeout?: { hours?: number; minutes?: number; seconds?: number } },
+  ): Promise<T>;
+  wait(duration: { seconds?: number; minutes?: number; hours?: number }): Promise<void>;
+  logger: { info(msg: string, data?: any): void };
+}
+```
+
+## Testing with MockDurableContext
+
+For tests, use a mock context that simulates checkpoint/replay and callbacks:
+
+```typescript
+import { Test } from '@nestjs/testing';
+import { WorkflowModule } from 'nestjs-serverless-workflow/core';
+import { DurableLambdaEventHandler } from 'nestjs-serverless-workflow/adapter';
+import type { DurableWorkflowEvent, DurableWorkflowResult, IDurableContext } from 'nestjs-serverless-workflow/adapter';
+
+// A minimal mock context for testing
+class MockDurableContext implements IDurableContext {
+  private steps = new Map<string, any>();
+  private callbacks = new Map<string, { resolve: (value: any) => void }>();
+
+  logger = { info: (_msg: string, _data?: any) => {} };
+
+  async step<T>(name: string, fn: () => Promise<T>): Promise<T> {
+    if (this.steps.has(name)) return this.steps.get(name);
+    const result = await fn();
+    this.steps.set(name, result);
+    return result;
+  }
+
+  async waitForCallback<T>(
+    name: string,
+    onRegister: (callbackId: string) => Promise<void>,
+  ): Promise<T> {
+    const callbackId = `callback:${name}`;
+    let resolve: (value: any) => void;
+    const promise = new Promise<T>((r) => { resolve = r; });
+    this.callbacks.set(callbackId, { resolve: resolve! });
+    await onRegister(callbackId);
+    return promise;
+  }
+
+  async wait(): Promise<void> {}
+
+  /** Submit a callback to resume the workflow — simulates an external system. */
+  submitCallback(name: string, payload: any): void {
+    const entry = this.callbacks.get(`callback:${name}`);
+    if (!entry) throw new Error(`No callback registered for: callback:${name}`);
+    entry.resolve(payload);
+  }
+}
+
+// Mock withDurableExecution — passes through to the raw handler
+const mockWithDurableExecution = (handler) => handler as any;
+
+// Usage in a test
+const module = await Test.createTestingModule({
   imports: [
     WorkflowModule.register({
-      entities: [],
-      workflows: [],
-      brokers: [
-        { provide: 'broker.order', useClass: MySqsEmitter },
-      ],
+      entities: [{ provide: 'entity.order', useValue: new OrderEntityService() }],
+      workflows: [OrderWorkflow],
     }),
   ],
-})
-export class AppModule {}
+}).compile();
+
+const app = module.createNestApplication();
+await app.init();
+
+const handler = DurableLambdaEventHandler(app, mockWithDurableExecution);
+const ctx = new MockDurableContext();
+
+// Start the workflow
+const resultPromise = handler(
+  { urn: 'order-1', initialEvent: 'order.created', payload: {} },
+  ctx,
+);
+
+// When the adapter reaches an idle or no_transition state, submit a callback:
+ctx.submitCallback('idle:pending:0', { event: 'order.submit', payload: {} });
+
+const result = await resultPromise;
 ```
 
-## Creating Custom Brokers
+## Creating Custom Adapters
 
-Implement the `IBrokerPublisher` interface to create custom brokers:
-
-### Kafka Example
+Any adapter simply calls `orchestrator.transit()` and reacts to the returned `TransitResult`. Here is a minimal example that processes continued transitions in a loop:
 
 ```typescript
-import { IBrokerPublisher, IWorkflowEvent } from 'nestjs-serverless-workflow/event-bus';
-import { Injectable } from '@nestjs/common';
-import { Kafka, Producer } from 'kafkajs';
+import { OrchestratorService } from 'nestjs-serverless-workflow/core';
+import type { IWorkflowEvent, TransitResult } from 'nestjs-serverless-workflow/core';
 
-@Injectable()
-export class KafkaEmitter implements IBrokerPublisher {
-  private producer: Producer;
-  private topic: string;
+async function runWorkflow(
+  orchestrator: OrchestratorService,
+  initialEvent: IWorkflowEvent,
+): Promise<TransitResult> {
+  let currentEvent = initialEvent;
 
-  constructor() {
-    const kafka = new Kafka({
-      clientId: 'my-app',
-      brokers: ['localhost:9092'],
-    });
-    this.producer = kafka.producer();
-    this.topic = 'workflow-events';
-  }
+  while (true) {
+    const result = await orchestrator.transit(currentEvent);
 
-  async onModuleInit() {
-    await this.producer.connect();
-  }
+    switch (result.status) {
+      case 'final':
+        return result;
 
-  async emit<T>(payload: IWorkflowEvent<T>): Promise<void> {
-    await this.producer.send({
-      topic: this.topic,
-      messages: [
-        {
-          key: payload.urn.toString(),
-          value: JSON.stringify(payload),
-        },
-      ],
-    });
-  }
+      case 'idle':
+        // Your adapter decides how to wait — poll a queue, wait for a webhook, etc.
+        return result;
 
-  async onModuleDestroy() {
-    await this.producer.disconnect();
-  }
-}
-```
+      case 'continued':
+        // Feed the next event back into transit
+        currentEvent = result.nextEvent;
+        break;
 
-### RabbitMQ Example
-
-```typescript
-import { IBrokerPublisher, IWorkflowEvent } from 'nestjs-serverless-workflow/event-bus';
-import { Injectable } from '@nestjs/common';
-import * as amqp from 'amqplib';
-
-@Injectable()
-export class RabbitMQEmitter implements IBrokerPublisher {
-  private connection: amqp.Connection;
-  private channel: amqp.Channel;
-  private exchange: string;
-
-  constructor() {
-    this.exchange = 'workflow-events';
-  }
-
-  async onModuleInit() {
-    this.connection = await amqp.connect('amqp://localhost');
-    this.channel = await this.connection.createChannel();
-    await this.channel.assertExchange(this.exchange, 'topic', {
-      durable: true,
-    });
-  }
-
-  async emit<T>(payload: IWorkflowEvent<T>): Promise<void> {
-    this.channel.publish(
-      this.exchange,
-      payload.topic,
-      Buffer.from(JSON.stringify(payload)),
-      { persistent: true }
-    );
-  }
-
-  async onModuleDestroy() {
-    await this.channel.close();
-    await this.connection.close();
-  }
-}
-```
-
-## Event Publishing
-
-### From Within Workflows
-
-```typescript
-import { Injectable, Inject } from '@nestjs/common';
-import { IBrokerPublisher, IWorkflowEvent } from 'nestjs-serverless-workflow/event-bus';
-
-@Injectable()
-export class OrderService {
-  constructor(
-    @Inject('broker.order')
-    private broker: IBrokerPublisher
-  ) {}
-
-  async createOrder(orderId: string, data: any) {
-    const event: IWorkflowEvent = {
-      topic: 'order.created',
-      urn: orderId,
-      payload: data,
-      attempt: 0,
-    };
-
-    await this.broker.emit(event);
-  }
-}
-```
-
-### From External Systems
-
-External systems can publish events to trigger workflows:
-
-```typescript
-// HTTP endpoint to trigger workflow events
-@Controller('events')
-export class EventsController {
-  constructor(
-    @Inject('broker.order')
-    private broker: IBrokerPublisher
-  ) {}
-
-  @Post('trigger')
-  async trigger(@Body() event: IWorkflowEvent) {
-    await this.broker.emit(event);
-    return { status: 'event published' };
-  }
-}
-```
-
-## Message Format
-
-### Basic Event
-
-```json
-{
-  "topic": "order.submit",
-  "urn": "order-12345",
-  "payload": {
-    "items": ["item1", "item2"],
-    "total": 150.00
-  },
-  "attempt": 0
-}
-```
-
-### Event Without Payload
-
-```json
-{
-  "topic": "order.cancel",
-  "urn": "order-12345",
-  "attempt": 0
-}
-```
-
-## Error Handling
-
-### Failed Message Handling
-
-For SQS, use batch item failures to retry failed messages:
-
-```typescript
-export const handler: SQSHandler = async (event, context) => {
-  const batchItemFailures = [];
-
-  for (const record of event.Records) {
-    try {
-      const workflowEvent = JSON.parse(record.body);
-      await orchestrator.transit(workflowEvent);
-    } catch (error) {
-      console.error('Failed to process:', error);
-      batchItemFailures.push({
-        itemIdentifier: record.messageId,
-      });
+      case 'no_transition':
+        // No auto-transition available — return and let the caller decide
+        return result;
     }
   }
-
-  return { batchItemFailures };
-};
+}
 ```
 
-### Dead Letter Queues
-
-Configure DLQs for messages that fail repeatedly:
-
-```yaml
-# SQS Queue Configuration (serverless.yml or AWS Console)
-Resources:
-  WorkflowQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      RedrivePolicy:
-        deadLetterTargetArn: !GetAtt WorkflowDLQ.Arn
-        maxReceiveCount: 3
-```
-
-## Best Practices
-
-1. **Use message deduplication**: Prevent duplicate event processing
-2. **Set appropriate timeouts**: Ensure messages aren't processed multiple times
-3. **Monitor queue depth**: Set up alarms for queue buildup
-4. **Use batch processing**: Process multiple events in a single invocation when possible
-5. **Implement idempotency**: Design handlers to be safely retried
+The key principle: the orchestrator is responsible for state transitions and business logic. The adapter is responsible for infrastructure concerns like checkpointing, waiting for callbacks, and retry.
 
 ## Related Documentation
 
-- [Lambda Adapter](./adapters) - Use with AWS Lambda
-- [Workflow Module](./workflow) - Define workflows
-
+- [Workflow Module](./workflow) - Define workflows and understand TransitResult
+- [Lambda Adapter](./adapters) - Deploy your workflows to AWS Lambda

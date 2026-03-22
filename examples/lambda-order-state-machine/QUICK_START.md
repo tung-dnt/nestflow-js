@@ -2,7 +2,7 @@
 
 Get the Lambda Order State Machine example up and running in 5 minutes!
 
-## 🚀 Fast Setup
+## Fast Setup
 
 ### 1. Install Dependencies (30 seconds)
 
@@ -28,16 +28,13 @@ bun run deploy:dev
 
 ### 4. Test It! (30 seconds)
 
-Send a test message:
+Invoke the Lambda directly:
 
 ```bash
-make test-message
+make invoke
 # or manually:
-aws sqs send-message \
-  --queue-url YOUR_QUEUE_URL \
-  --message-body '{"urn":"order-1","event":"order.submit","payload":{"items":["laptop"],"totalAmount":999}}' \
-  --message-group-id "order-1" \
-  --message-deduplication-id "$(uuidgen)"
+serverless invoke -f order-workflow \
+  --data '{"urn":"order-1","event":"order.submit","payload":{"items":["laptop"],"totalAmount":999}}'
 ```
 
 Watch the logs:
@@ -48,25 +45,21 @@ make logs
 bun run logs
 ```
 
-## 🎯 What You Get
+## What You Get
 
 After deployment, you'll have:
 
-✅ **Lambda Function** - Processes orders automatically  
-✅ **SQS Queue (FIFO)** - Reliable message delivery  
-✅ **DynamoDB Table** - Persistent order storage  
-✅ **Dead Letter Queue** - Failed message handling  
-✅ **CloudWatch Logs** - Full observability  
+- **Durable Lambda Function** - Processes orders with fault-tolerant execution
+- **DynamoDB Table** - Persistent order storage
+- **CloudWatch Logs** - Full observability
 
-## 📊 Architecture
+## Architecture
 
 ```
-Order → SQS Queue → Lambda (Workflow) → DynamoDB
-                         ↓
-                    DLQ (Failed)
+Event Source → Durable Lambda (Workflow) → DynamoDB
 ```
 
-## 🔄 Order Workflow
+## Order Workflow
 
 ```
 PENDING → PROCESSING → COMPLETED
@@ -75,28 +68,17 @@ PENDING → PROCESSING → COMPLETED
    └──▶ FAILED
 ```
 
-## 🧪 Local Development
+## Local Development
 
 Run locally without deploying:
 
 ```bash
 make local
 # or
-bun run dev
+bun run start:dev
 ```
 
-Then test via HTTP:
-
-```bash
-curl -X POST http://localhost:3000/orders \
-  -H "Content-Type: application/json" \
-  -d '{
-    "items": ["laptop", "mouse"],
-    "totalAmount": 1050.00
-  }'
-```
-
-## 📝 Common Commands
+## Common Commands
 
 ```bash
 # Development
@@ -112,17 +94,15 @@ make logs             # View logs
 make info             # Show deployment info
 
 # Testing
-make test-message     # Send test SQS message
 make invoke           # Invoke Lambda directly
 make show-table       # View DynamoDB items
-make show-queue       # Show queue stats
 
 # Cleanup
 make remove           # Remove deployment
 make clean            # Clean build files
 ```
 
-## 🔍 Monitoring
+## Monitoring
 
 ### View Logs in Real-Time
 
@@ -136,52 +116,40 @@ make logs
 make show-table
 ```
 
-### Check SQS Queue
-
-```bash
-make show-queue
-```
-
-## 💡 Quick Tips
+## Quick Tips
 
 1. **Use Makefile**: All common operations are in the Makefile
 2. **Check Logs**: Always check CloudWatch logs if something fails
-3. **DLQ Messages**: Check DLQ if messages aren't processing
-4. **IAM Permissions**: Ensure your AWS user has proper permissions
-5. **Cost**: Dev stage is mostly free tier eligible
+3. **IAM Permissions**: Ensure your AWS user has proper permissions
+4. **Cost**: Dev stage is mostly free tier eligible
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
-**Issue**: Deployment fails  
+**Issue**: Deployment fails
 **Fix**: Check AWS credentials with `aws sts get-caller-identity`
 
-**Issue**: Messages not processing  
+**Issue**: Workflow not processing
 **Fix**: Check Lambda logs with `make logs`
 
-**Issue**: Can't find queue URL  
-**Fix**: Run `make info` to see all endpoints
+**Issue**: Permission denied
+**Fix**: Ensure IAM user has Lambda and DynamoDB permissions
 
-**Issue**: Permission denied  
-**Fix**: Ensure IAM user has Lambda, SQS, DynamoDB permissions
-
-## 📚 Next Steps
+## Next Steps
 
 - Read [README.md](./README.md) for detailed documentation
 - Check [DEPLOYMENT.md](./DEPLOYMENT.md) for production deployment
 - Explore source code in `src/` directory
 - Customize workflow in `src/order/order.workflow.ts`
 
-## 🆘 Need Help?
+## Need Help?
 
 - **Documentation**: [../../docs/](../../docs/)
 - **GitHub Issues**: https://github.com/tung-dnt/nestjs-serverless-workflow/issues
 - **AWS Docs**: https://aws.amazon.com/lambda/
 
-## 🎉 Success!
+## Success!
 
-You now have a production-ready serverless workflow running on AWS!
+You now have a production-ready serverless workflow running on AWS with durable execution!
 
 Try modifying the workflow states in `src/order/order.workflow.ts` and redeploy to see changes.
-
-**Happy coding! 🚀**
 

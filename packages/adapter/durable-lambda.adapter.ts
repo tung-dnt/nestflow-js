@@ -49,10 +49,7 @@ export type WithDurableExecution = <TEvent, TResult>(
  * @param app - NestJS application context
  * @param withDurableExecution - The `withDurableExecution` function from `@aws/durable-execution-sdk-js`
  */
-export const DurableLambdaEventHandler = (
-  app: INestApplicationContext,
-  withDurableExecution: WithDurableExecution,
-) => {
+export const DurableLambdaEventHandler = (app: INestApplicationContext, withDurableExecution: WithDurableExecution) => {
   const orchestrator = app.get(OrchestratorService);
 
   return withDurableExecution(async (event: DurableWorkflowEvent, ctx: IDurableContext) => {

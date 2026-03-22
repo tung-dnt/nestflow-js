@@ -69,7 +69,6 @@ async onSubmit(@Entity() entity: Order, @Payload() data: SubmitOrderDto) {
     // Define your transitions here
   ],
   entityService: 'entity.order',
-  brokerPublisher: 'broker.order',
 })
 export class OrderWorkflow {
   // Event handlers
@@ -172,28 +171,62 @@ WorkflowModule.register({
     { provide: 'entity.order', useClass: OrderEntityService },
   ],
   workflows: [OrderWorkflow, UserWorkflow],
-  brokers: [
-    { provide: 'broker.order', useClass: SqsEmitter },
-  ],
 })
 ```
 
 ## Orchestrator Service
 
-The `OrchestratorService` handles workflow execution:
+The `OrchestratorService` handles workflow execution. The `transit()` method returns a `TransitResult` that tells the caller what happened:
 
 ```typescript
 import { OrchestratorService } from 'nestjs-serverless-workflow/core';
+import type { TransitResult, IWorkflowEvent } from 'nestjs-serverless-workflow/core';
 
 @Injectable()
 export class MyService {
   constructor(private orchestrator: OrchestratorService) {}
 
   async processEvent(event: IWorkflowEvent) {
-    await this.orchestrator.transit(event);
+    const result: TransitResult = await this.orchestrator.transit(event);
+
+    switch (result.status) {
+      case 'final':
+        // Workflow reached a terminal state
+        console.log('Completed in state:', result.state);
+        break;
+      case 'idle':
+        // Workflow is waiting for an external event
+        console.log('Idle at state:', result.state);
+        break;
+      case 'continued':
+        // A follow-up transition is available
+        console.log('Next event:', result.nextEvent);
+        break;
+      case 'no_transition':
+        // No unambiguous auto-transition from current state
+        console.log('Waiting at state:', result.state);
+        break;
+    }
   }
 }
 ```
+
+### TransitResult
+
+```typescript
+type TransitResult =
+  | { status: 'final'; state: string | number }
+  | { status: 'idle'; state: string | number }
+  | { status: 'continued'; nextEvent: IWorkflowEvent }
+  | { status: 'no_transition'; state: string | number };
+```
+
+| Status | Meaning |
+|--------|---------|
+| `final` | The entity reached a terminal state. The workflow is complete. |
+| `idle` | The entity is in an idle state, waiting for an explicit external event. |
+| `continued` | A valid next transition was found. `nextEvent` contains the event to process next. |
+| `no_transition` | The entity is in a non-final, non-idle state but no unambiguous auto-transition exists. Requires an explicit event. |
 
 ## Error Handling
 

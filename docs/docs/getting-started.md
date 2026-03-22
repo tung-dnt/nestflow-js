@@ -30,7 +30,6 @@ import { WorkflowModule } from 'nestjs-serverless-workflow/core';
     WorkflowModule.register({
       entities: [],
       workflows: [],
-      brokers: [],
     }),
   ],
 })
@@ -79,7 +78,6 @@ import { Workflow, OnEvent, Entity, Payload } from 'nestjs-serverless-workflow/c
     },
   ],
   entityService: 'entity.order',
-  brokerPublisher: 'broker.order',
 })
 export class OrderWorkflow {
   @OnEvent('order.submit')
@@ -143,9 +141,6 @@ import { OrderEntityService } from './order-entity.service';
         { provide: 'entity.order', useClass: OrderEntityService },
       ],
       workflows: [OrderWorkflow],
-      brokers: [
-        { provide: 'broker.order', useClass: MySqsEmitter },
-      ],
     }),
   ],
 })
@@ -155,7 +150,7 @@ export class OrderModule {}
 ## Next Steps
 
 - [Workflow Configuration](./workflow) - Learn about workflow states, transitions, and events
-- [Event Bus Integration](./event-bus) - Connect to SQS and other message brokers
+- [Adapters & TransitResult](./event-bus) - Handle workflow progression with adapters
 - [Lambda Adapter](./adapters) - Deploy your workflows to AWS Lambda
 - [Examples](./examples/lambda-order-state-machine) - Explore complete working examples
 

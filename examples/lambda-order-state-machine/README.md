@@ -1,39 +1,32 @@
 # Lambda Order State Machine Example
 
-Complete AWS Lambda example demonstrating the `nestjs-serverless-workflow` library with SQS, DynamoDB, and serverless deployment.
+Complete AWS Lambda example demonstrating the `nestjs-serverless-workflow` library with Durable Lambda execution, DynamoDB, and serverless deployment.
 
-## 🏗️ Architecture
+## Architecture
 
 ```
-┌─────────────┐      ┌──────────────┐      ┌─────────────────┐
-│  SQS Queue  │─────▶│ Lambda Worker│─────▶│ DynamoDB Table │
-│   (FIFO)    │      │  (Workflow)  │      │    (Orders)     │
-└─────────────┘      └──────────────┘      └─────────────────┘
-       │                     │
-       │                     ▼
-       │            ┌──────────────┐
-       └───────────▶│  DLQ (FIFO)  │
-                    └──────────────┘
+┌──────────────┐      ┌────────────────────────┐      ┌─────────────────┐
+│  Event Source │─────▶│  Durable Lambda Worker │─────▶│ DynamoDB Table  │
+│  (Invoke)     │      │  (withDurableExecution) │      │    (Orders)     │
+└──────────────┘      └────────────────────────┘      └─────────────────┘
 ```
 
-## 🚀 Features
+## Features
 
 - **Serverless Deployment**: Fully configured AWS Lambda with Serverless Framework
-- **Event-Driven**: SQS FIFO queue for reliable message processing
+- **Durable Execution**: Uses `@aws/durable-execution-sdk-js` for reliable, resumable workflow execution
 - **State Persistence**: DynamoDB for order storage
-- **Error Handling**: Dead Letter Queue (DLQ) for failed messages
 - **Auto-Scaling**: On-demand DynamoDB and concurrent Lambda execution
 - **Monitoring**: CloudWatch logs with 90-day retention
-- **Batch Processing**: Process up to 10 messages per Lambda invocation
 
-## 📦 Installation
+## Installation
 
 ```bash
 cd examples/lambda-order-state-machine
 bun install
 ```
 
-## 🔧 Configuration
+## Configuration
 
 ### Environment Variables
 
@@ -61,34 +54,17 @@ export AWS_SECRET_ACCESS_KEY=your_secret_key
 export AWS_REGION=us-east-1
 ```
 
-## 🏃 Running Locally
+## Running Locally
 
-### Start the HTTP Server
+### Start the Application
 
 ```bash
-bun run local
+bun run start
 # or
-bun run dev  # with hot reload
+bun run start:dev  # with hot reload
 ```
 
-The server will start on `http://localhost:3000`
-
-### Test Endpoints
-
-```bash
-# Create an order (triggers workflow)
-curl -X POST http://localhost:3000/orders \
-  -H "Content-Type: application/json" \
-  -d '{
-    "items": ["item1", "item2"],
-    "totalAmount": 150.00
-  }'
-
-# Get order status
-curl http://localhost:3000/orders/{orderId}
-```
-
-## 🚢 Deployment
+## Deployment
 
 ### Build TypeScript
 
@@ -119,17 +95,12 @@ service: lambda-order-state-machine
 stage: dev
 region: us-east-1
 stack: lambda-order-state-machine-dev
-resources: 12
 
 functions:
-  order-queue-worker: lambda-order-state-machine-dev-order-queue-worker
-
-Outputs:
-  OrdersTableName: lambda-order-state-machine-orders-dev
-  OrderQueueUrl: https://sqs.us-east-1.amazonaws.com/.../lambda-order-state-machine-orders-dev.fifo
+  order-workflow: lambda-order-state-machine-dev-order-workflow
 ```
 
-## 📊 Monitoring
+## Monitoring
 
 ### View Logs
 
@@ -138,37 +109,36 @@ Outputs:
 bun run logs
 
 # Or with serverless directly
-serverless logs -f order-queue-worker -t --stage dev
+serverless logs -f order-workflow -t --stage dev
 ```
 
 ### CloudWatch Metrics
 
 Monitor in AWS Console:
-- Lambda Invocations
-- SQS Messages (Sent, Received, Deleted)
+- Lambda Invocations and Duration
 - DynamoDB Read/Write Capacity
+- Durable Execution metrics
 - Error Rates
 
-## 🧪 Testing
-
-### Send Test Message to SQS
-
-```bash
-aws sqs send-message \
-  --queue-url https://sqs.us-east-1.amazonaws.com/.../lambda-order-state-machine-orders-dev.fifo \
-  --message-body '{"urn":"order-123","event":"order.submit","payload":{"items":["item1"],"totalAmount":100}}' \
-  --message-group-id "order-123" \
-  --message-deduplication-id "$(uuidgen)"
-```
+## Testing
 
 ### Invoke Lambda Directly
 
 ```bash
-serverless invoke -f order-queue-worker \
-  --data '{"Records":[{"body":"{\"urn\":\"order-123\",\"event\":\"order.submit\"}"}]}'
+serverless invoke -f order-workflow \
+  --data '{"urn":"order-123","event":"order.submit","payload":{"items":["item1"],"totalAmount":100}}'
 ```
 
-## 🔄 Workflow States
+### Invoke via AWS CLI
+
+```bash
+aws lambda invoke \
+  --function-name lambda-order-state-machine-dev-order-workflow \
+  --payload '{"urn":"order-123","event":"order.submit","payload":{"items":["item1"],"totalAmount":100}}' \
+  output.json
+```
+
+## Workflow States
 
 The order workflow transitions through these states:
 
@@ -188,24 +158,21 @@ PENDING → PROCESSING → COMPLETED
 4. **CANCELLED**: Order cancelled (manual)
 5. **FAILED**: Order failed (on error)
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 lambda-order-state-machine/
 ├── src/
-│   ├── broker/
-│   │   └── mock-broker.service.ts    # SQS mock publisher
 │   ├── dynamodb/
 │   │   ├── client.ts                 # DynamoDB client
 │   │   └── order.table.ts            # Order table definition
 │   ├── order/
 │   │   ├── order.constant.ts         # Constants and enums
-│   │   ├── order.controller.ts       # HTTP endpoints
 │   │   ├── order.module.ts           # NestJS module
 │   │   ├── order.workflow.ts         # Workflow definition
 │   │   └── order-entity.service.ts   # Entity service
-│   ├── lambda.ts                     # Lambda handler
-│   └── main.ts                       # HTTP server entry
+│   ├── lambda.ts                     # Durable Lambda handler
+│   └── main.ts                       # Local entry point
 ├── dist/                             # Compiled JavaScript
 ├── package.json
 ├── serverless.yml                    # Serverless config
@@ -213,92 +180,92 @@ lambda-order-state-machine/
 └── README.md
 ```
 
-## 🛠️ Stack Details
+## Stack Details
 
 ### AWS Resources Created
 
-1. **Lambda Function**
+1. **Lambda Function (Durable)**
    - Runtime: Node.js 20.x
-   - Memory: 1024 MB
+   - Memory: 512 MB
    - Timeout: 15 minutes
-   - Concurrency: 5 (reserved)
+   - Wrapped with `withDurableExecution` for automatic replay and fault tolerance
 
-2. **SQS Queue (FIFO)**
-   - Message retention: 14 days
-   - Visibility timeout: 15 minutes
-   - Max retries: 3
-   - DLQ enabled
-
-3. **DynamoDB Table**
+2. **DynamoDB Table**
    - Billing: On-demand
    - Point-in-time recovery: Enabled
    - Stream: Enabled (NEW_AND_OLD_IMAGES)
    - GSI: status-index
 
-4. **Dead Letter Queue (FIFO)**
-   - Message retention: 14 days
-   - For failed messages after 3 retries
+3. **Durable Execution Store**
+   - Managed by `@aws/durable-execution-sdk-js`
+   - Stores execution history for replay on Lambda restarts
 
 ### IAM Permissions
 
 The Lambda function has permissions for:
 - DynamoDB: GetItem, PutItem, UpdateItem, Query, Scan
-- SQS: SendMessage, ReceiveMessage, DeleteMessage, GetQueueAttributes
 
-## 💰 Cost Estimation
+## Cost Estimation
 
 **Development (dev stage)**:
 - Lambda: ~$0.01 - $1.00/month (depending on usage)
 - DynamoDB: Free tier (25 GB storage, 25 RCU/WCU)
-- SQS: Free tier (1M requests)
 
 **Production (prod stage)**:
 - Scales with usage, typically $10-100/month for moderate traffic
 
-## 🔥 Advanced Features
+## Advanced Features
 
-### Retry Logic
+### Durable Execution
 
-Failed messages are automatically retried up to 3 times with exponential backoff before moving to DLQ.
+The Lambda handler is wrapped with `withDurableExecution`, which provides:
+- **Automatic Replay**: If the Lambda is interrupted, execution resumes from the last checkpoint
+- **Fault Tolerance**: Transient failures are handled transparently
+- **Deterministic Execution**: Side effects are recorded and replayed consistently
 
-### Batch Processing
+### Lambda Handler
 
-Lambda processes up to 10 messages per invocation for efficiency.
+```typescript
+import { withDurableExecution } from "@aws/durable-execution-sdk-js";
+import { NestFactory } from "@nestjs/core";
+import { DurableLambdaEventHandler } from "nestjs-serverless-workflow/adapter";
+import { OrderModule } from "./order/order.module";
 
-### Partial Batch Failures
+const app = await NestFactory.createApplicationContext(OrderModule);
+await app.init();
 
-Uses `ReportBatchItemFailures` to only retry failed messages in a batch.
+export const handler = DurableLambdaEventHandler(app, withDurableExecution);
+```
 
-### Auto-Timeout Handling
+### Module Registration
 
-Lambda adapter gracefully stops processing 5 seconds before timeout to avoid message duplication.
+```typescript
+WorkflowModule.register({
+  entities: [{ provide: ORDER_WORKFLOW_ENTITY, useClass: OrderEntityService }],
+  workflows: [OrderWorkflow],
+})
+```
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Deployment Issues
-
-**Issue**: `An error occurred: OrderQueue - A queue already exists with the same name`
-**Solution**: Delete the existing queue or change the service name in `serverless.yml`
 
 **Issue**: `The security token included in the request is invalid`
 **Solution**: Check AWS credentials with `aws sts get-caller-identity`
 
 ### Runtime Issues
 
-**Issue**: Messages stuck in DLQ
-**Solution**: Check CloudWatch logs for errors, fix issues, then replay messages
-
 **Issue**: Lambda timeout
 **Solution**: Increase timeout in `serverless.yml` or optimize workflow logic
 
-### Message Not Processing
+**Issue**: Workflow not progressing
+**Solution**:
+1. Check Lambda CloudWatch logs
+2. Verify IAM permissions
+3. Check DynamoDB table exists
+4. Verify durable execution store is accessible
 
-1. Check SQS queue has messages
-2. Check Lambda CloudWatch logs
-3. Verify IAM permissions
-4. Check DynamoDB table exists
-
-## 🧹 Cleanup
+## Cleanup
 
 Remove all AWS resources:
 
@@ -308,19 +275,18 @@ serverless remove --stage dev
 
 This will delete:
 - Lambda function
-- SQS queues (main + DLQ)
 - DynamoDB table
 - IAM roles
 - CloudWatch log groups
 
-## 📚 Learn More
+## Learn More
 
 - [nestjs-serverless-workflow Documentation](../../docs/)
 - [Serverless Framework Docs](https://www.serverless.com/framework/docs)
 - [AWS Lambda Best Practices](https://docs.aws.amazon.com/lambda/latest/dg/best-practices.html)
-- [SQS FIFO Queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues.html)
+- [AWS Durable Execution SDK](https://github.com/aws/durable-execution-sdk-js)
 - [DynamoDB Best Practices](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/best-practices.html)
 
-## 📝 License
+## License
 
 MIT
