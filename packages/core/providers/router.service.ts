@@ -30,38 +30,42 @@ export class RouterService<T, Event, State> {
     entity: T,
     payload: P,
     options?: { skipEventCheck?: boolean },
-  ): ITransitionEvent<T, Event, State, P> | null {
+  ): { transition: ITransitionEvent<T, Event, State, P> | null; hasEventStateMatch: boolean } {
     const currentStatus = this.entityService.status(entity);
-    const possibleNextTransitionSet = new Set<State>();
+    const skipEventCheck = options?.skipEventCheck === true;
 
-    const possibleTransitions = this.workflowDefinition.transitions
-      // Find transition event that matches the current event and state
-      .filter((transition) => {
-        const events = Array.isArray(transition.event) ? transition.event : [transition.event];
-        const states = (Array.isArray(transition.from) ? transition.from : [transition.from]) as Array<string | number>;
-        return (options?.skipEventCheck ? true : events.includes(this.event)) && states.includes(currentStatus);
-      })
-      // Condition checking
-      .filter(({ conditions, to }) => {
-        if (conditions?.some((condition) => !condition(entity, payload))) return false;
+    let firstMatch: ITransitionEvent<T, Event, State, P> | null = null;
+    let hasEventStateMatch = false;
 
-        possibleNextTransitionSet.add(to);
-        return true;
-      });
+    for (const t of this.workflowDefinition.transitions) {
+      if (!this.matchesState(t.from, currentStatus)) continue;
+      if (!skipEventCheck && !this.matchesEvent(t.event)) continue;
 
-    if (possibleTransitions.length === 0) return null;
+      hasEventStateMatch = true;
 
-    const possibleNextTransitions = Array.from(possibleNextTransitionSet);
-    if (possibleNextTransitions.length > 1) {
-      // Auto-transitions: gracefully stop on ambiguity (multiple possible target states)
-      if (options?.skipEventCheck) return null;
-      throw new BadRequestException(
-        `Multiple "to" transition states is not allowed, please verify Workflow Definition at @Workflow decorator: [${possibleNextTransitions.join(', ')}]`,
-      );
+      if (t.conditions?.some((c) => !c(entity, payload))) continue;
+
+      if (!firstMatch) {
+        firstMatch = t;
+      } else if (t.to !== firstMatch.to) {
+        if (skipEventCheck) return { transition: null, hasEventStateMatch };
+        throw new BadRequestException(
+          `Multiple "to" transition states is not allowed, please verify Workflow Definition at @Workflow decorator: [${firstMatch.to}, ${t.to}]`,
+        );
+      }
     }
 
-    // Since event and "to" transition state will be similar
-    return possibleTransitions[0];
+    return { transition: firstMatch, hasEventStateMatch };
+  }
+
+  private matchesState(from: State | State[], currentStatus: string | number): boolean {
+    return Array.isArray(from)
+      ? (from as Array<string | number>).includes(currentStatus)
+      : (from as string | number) === currentStatus;
+  }
+
+  private matchesEvent(event: Event | Event[]): boolean {
+    return Array.isArray(event) ? event.includes(this.event) : event === this.event;
   }
 
   isInIdleStatus(entity: T): boolean {

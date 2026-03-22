@@ -1,1 +1,1 @@
-export * from './lambda.adapter';
+export * from './durable-lambda.adapter';

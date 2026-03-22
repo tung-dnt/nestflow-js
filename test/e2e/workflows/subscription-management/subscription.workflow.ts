@@ -1,5 +1,4 @@
-import { Inject, Logger } from '@nestjs/common';
-import type { IBrokerPublisher } from '@/event-bus';
+import { Logger } from '@nestjs/common';
 import { Entity, OnDefault, OnEvent, Payload, Workflow } from '@/core';
 
 import type { Subscription } from './subscription.entity';
@@ -18,7 +17,6 @@ export enum SubscriptionEvent {
 }
 
 export const SUBSCRIPTION_ENTITY_TOKEN = 'entity.subscription';
-export const SUBSCRIPTION_BROKER_TOKEN = 'broker.subscription';
 
 @Workflow<Subscription, SubscriptionEvent, SubscriptionState>({
   name: 'SubscriptionWorkflow',
@@ -61,15 +59,11 @@ export const SUBSCRIPTION_BROKER_TOKEN = 'broker.subscription';
     },
   ],
   entityService: SUBSCRIPTION_ENTITY_TOKEN,
-  brokerPublisher: SUBSCRIPTION_BROKER_TOKEN,
 })
 export class SubscriptionWorkflow {
   private readonly logger = new Logger(SubscriptionWorkflow.name);
 
-  constructor(
-    @Inject(SUBSCRIPTION_BROKER_TOKEN)
-    private readonly brokerPublisher: IBrokerPublisher,
-  ) {}
+  constructor() {}
 
   @OnEvent(SubscriptionEvent.TRIAL_STARTED)
   async handleTrialStarted(@Entity() subscription: Subscription) {
@@ -80,21 +74,6 @@ export class SubscriptionWorkflow {
   @OnEvent(SubscriptionEvent.TRIAL_ENDED)
   async handleTrialEnded(@Entity() subscription: Subscription, @Payload() payload: any) {
     this.logger.log(`Subscription ${subscription.id} trial ended`);
-    if (payload?.paymentMethodId) {
-      await this.brokerPublisher.emit({
-        topic: 'subscription.activated',
-        urn: subscription.id,
-        attempt: 0,
-        payload: { subscriptionId: subscription.id, userId: subscription.userId },
-      });
-    } else {
-      await this.brokerPublisher.emit({
-        topic: 'subscription.expired',
-        urn: subscription.id,
-        attempt: 0,
-        payload: { subscriptionId: subscription.id, userId: subscription.userId },
-      });
-    }
     return { paymentMethodId: payload?.paymentMethodId };
   }
 
@@ -107,28 +86,12 @@ export class SubscriptionWorkflow {
   @OnEvent(SubscriptionEvent.PAYMENT_FAILED)
   async handlePaymentFailed(@Entity() subscription: Subscription, @Payload() payload: any) {
     this.logger.log(`Subscription ${subscription.id} payment failed`);
-    await this.brokerPublisher.emit({
-      topic: 'subscription.suspended',
-      urn: subscription.id,
-      attempt: 0,
-      payload: {
-        subscriptionId: subscription.id,
-        userId: subscription.userId,
-        gracePeriodEndsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days
-      },
-    });
     return { gracePeriodEndsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() };
   }
 
   @OnEvent(SubscriptionEvent.PAYMENT_SUCCEEDED)
   async handlePaymentSucceeded(@Entity() subscription: Subscription) {
     this.logger.log(`Subscription ${subscription.id} payment succeeded`);
-    await this.brokerPublisher.emit({
-      topic: 'subscription.reactivated',
-      urn: subscription.id,
-      attempt: 0,
-      payload: { subscriptionId: subscription.id, userId: subscription.userId },
-    });
     return { currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() };
   }
 
@@ -147,12 +110,6 @@ export class SubscriptionWorkflow {
   @OnEvent(SubscriptionEvent.CANCELLED)
   async handleCancelled(@Entity() subscription: Subscription) {
     this.logger.log(`Subscription ${subscription.id} cancelled`);
-    await this.brokerPublisher.emit({
-      topic: 'subscription.cancelled',
-      urn: subscription.id,
-      attempt: 0,
-      payload: { subscriptionId: subscription.id, userId: subscription.userId },
-    });
     return { cancelledAt: new Date().toISOString() };
   }
 

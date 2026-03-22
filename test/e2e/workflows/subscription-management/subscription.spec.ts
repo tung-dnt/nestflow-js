@@ -2,13 +2,11 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { WorkflowModule } from '@/core/workflow.module';
 import { OrchestratorService } from '@/core/providers/orchestrator.service';
-import { MockBrokerService } from '../../fixtures/mock-broker.service';
-import { assertEntityState, assertBrokerEvent, createWorkflowEvent } from '../../fixtures/test-helpers';
+import { assertEntityState, createWorkflowEvent } from '../../fixtures/test-helpers';
 import {
   SubscriptionWorkflow,
   SubscriptionEvent,
   SUBSCRIPTION_ENTITY_TOKEN,
-  SUBSCRIPTION_BROKER_TOKEN,
 } from './subscription.workflow';
 import { SubscriptionEntityService, SubscriptionState } from './subscription.entity';
 
@@ -16,10 +14,8 @@ describe('Subscription Management Workflow E2E', () => {
   let module: TestingModule;
   let orchestrator: OrchestratorService;
   let entityService: SubscriptionEntityService;
-  let broker: MockBrokerService;
 
   beforeEach(async () => {
-    broker = new MockBrokerService();
     entityService = new SubscriptionEntityService();
 
     module = await Test.createTestingModule({
@@ -27,7 +23,6 @@ describe('Subscription Management Workflow E2E', () => {
         WorkflowModule.register({
           entities: [{ provide: SUBSCRIPTION_ENTITY_TOKEN, useValue: entityService }],
           workflows: [SubscriptionWorkflow],
-          brokers: [{ provide: SUBSCRIPTION_BROKER_TOKEN, useValue: broker }],
         }),
       ],
     }).compile();
@@ -38,7 +33,6 @@ describe('Subscription Management Workflow E2E', () => {
 
   afterEach(async () => {
     entityService.clear();
-    broker.clearEvents();
     await module.close();
   });
 
@@ -56,7 +50,6 @@ describe('Subscription Management Workflow E2E', () => {
 
       const updatedSubscription = await entityService.load(subscription.id);
       assertEntityState(updatedSubscription!, entityService, SubscriptionState.ACTIVE);
-      assertBrokerEvent(broker, 'subscription.activated', subscription.id);
     });
   });
 
@@ -70,7 +63,6 @@ describe('Subscription Management Workflow E2E', () => {
 
       const updatedSubscription = await entityService.load(subscription.id);
       assertEntityState(updatedSubscription!, entityService, SubscriptionState.EXPIRED);
-      assertBrokerEvent(broker, 'subscription.expired', subscription.id);
     });
   });
 
@@ -83,7 +75,6 @@ describe('Subscription Management Workflow E2E', () => {
 
       const updatedSubscription = await entityService.load(subscription.id);
       assertEntityState(updatedSubscription!, entityService, SubscriptionState.SUSPENDED);
-      assertBrokerEvent(broker, 'subscription.suspended', subscription.id);
     });
   });
 
@@ -96,7 +87,6 @@ describe('Subscription Management Workflow E2E', () => {
 
       const updatedSubscription = await entityService.load(subscription.id);
       assertEntityState(updatedSubscription!, entityService, SubscriptionState.ACTIVE);
-      assertBrokerEvent(broker, 'subscription.reactivated', subscription.id);
     });
   });
 
@@ -109,7 +99,6 @@ describe('Subscription Management Workflow E2E', () => {
 
       const updatedSubscription = await entityService.load(subscription.id);
       assertEntityState(updatedSubscription!, entityService, SubscriptionState.CANCELLED);
-      assertBrokerEvent(broker, 'subscription.cancelled', subscription.id);
     });
 
     test('should cancel suspended subscription: SUSPENDED → CANCELLED', async () => {
@@ -206,53 +195,6 @@ describe('Subscription Management Workflow E2E', () => {
 
       updatedSubscription = await entityService.load(subscription.id);
       assertEntityState(updatedSubscription!, entityService, SubscriptionState.ACTIVE);
-    });
-  });
-
-  describe('Broker Integration', () => {
-    test('should emit activation event when trial ends with payment', async () => {
-      const subscription = await entityService.create();
-      await entityService.update(subscription, SubscriptionState.TRIAL);
-
-      await orchestrator.transit(
-        createWorkflowEvent(SubscriptionEvent.TRIAL_ENDED, subscription.id, {
-          paymentMethodId: 'pm_123',
-        }),
-      );
-
-      assertBrokerEvent(broker, 'subscription.activated', subscription.id);
-      const events = broker.getEventsByTopic('subscription.activated');
-      expect(events[0].payload).toHaveProperty('subscriptionId', subscription.id);
-      expect(events[0].payload).toHaveProperty('userId', subscription.userId);
-    });
-
-    test('should emit suspended event on payment failure', async () => {
-      const subscription = await entityService.create();
-      await entityService.update(subscription, SubscriptionState.ACTIVE);
-
-      await orchestrator.transit(createWorkflowEvent(SubscriptionEvent.PAYMENT_FAILED, subscription.id));
-
-      assertBrokerEvent(broker, 'subscription.suspended', subscription.id);
-      const events = broker.getEventsByTopic('subscription.suspended');
-      expect(events[0].payload).toHaveProperty('gracePeriodEndsAt');
-    });
-
-    test('should emit reactivated event on payment success', async () => {
-      const subscription = await entityService.create();
-      await entityService.update(subscription, SubscriptionState.SUSPENDED);
-
-      await orchestrator.transit(createWorkflowEvent(SubscriptionEvent.PAYMENT_SUCCEEDED, subscription.id));
-
-      assertBrokerEvent(broker, 'subscription.reactivated', subscription.id);
-    });
-
-    test('should emit cancelled event on cancellation', async () => {
-      const subscription = await entityService.create();
-      await entityService.update(subscription, SubscriptionState.ACTIVE);
-
-      await orchestrator.transit(createWorkflowEvent(SubscriptionEvent.CANCELLED, subscription.id));
-
-      assertBrokerEvent(broker, 'subscription.cancelled', subscription.id);
     });
   });
 

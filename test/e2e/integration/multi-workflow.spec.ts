@@ -2,7 +2,6 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { WorkflowModule } from '@/core/workflow.module';
 import { OrchestratorService } from '@/core/providers/orchestrator.service';
-import { MockBrokerService } from '../fixtures/mock-broker.service';
 import { MockRetryHandler } from '../fixtures/mock-retry-handler.service';
 import { assertEntityState, createWorkflowEvent } from '../fixtures/test-helpers';
 
@@ -11,21 +10,18 @@ import {
   OrderWorkflow,
   OrderEvent,
   ORDER_ENTITY_TOKEN,
-  ORDER_BROKER_TOKEN,
 } from '../workflows/order-processing/order.workflow';
 import { OrderEntityService, OrderState } from '../workflows/order-processing/order.entity';
 import {
   UserOnboardingWorkflow,
   OnboardingEvent,
   ONBOARDING_ENTITY_TOKEN,
-  ONBOARDING_BROKER_TOKEN,
 } from '../workflows/user-onboarding/onboarding.workflow';
 import { UserEntityService, OnboardingState } from '../workflows/user-onboarding/user.entity';
 import {
   PaymentWorkflow,
   PaymentEvent,
   PAYMENT_ENTITY_TOKEN,
-  PAYMENT_BROKER_TOKEN,
   PAYMENT_RETRY_HANDLER_TOKEN,
 } from '../workflows/payment-processing/payment.workflow';
 import { PaymentEntityService, PaymentState } from '../workflows/payment-processing/payment.entity';
@@ -36,11 +32,9 @@ describe('Multi-Workflow Integration E2E', () => {
   let orderEntityService: OrderEntityService;
   let userEntityService: UserEntityService;
   let paymentEntityService: PaymentEntityService;
-  let broker: MockBrokerService;
   let retryHandler: MockRetryHandler;
 
   beforeEach(async () => {
-    broker = new MockBrokerService();
     retryHandler = new MockRetryHandler();
     orderEntityService = new OrderEntityService();
     userEntityService = new UserEntityService();
@@ -55,11 +49,6 @@ describe('Multi-Workflow Integration E2E', () => {
             { provide: PAYMENT_ENTITY_TOKEN, useValue: paymentEntityService },
           ],
           workflows: [OrderWorkflow, UserOnboardingWorkflow, PaymentWorkflow],
-          brokers: [
-            { provide: ORDER_BROKER_TOKEN, useValue: broker },
-            { provide: ONBOARDING_BROKER_TOKEN, useValue: broker },
-            { provide: PAYMENT_BROKER_TOKEN, useValue: broker },
-          ],
         }),
       ],
       providers: [{ provide: PAYMENT_RETRY_HANDLER_TOKEN, useValue: retryHandler }],
@@ -73,7 +62,6 @@ describe('Multi-Workflow Integration E2E', () => {
     orderEntityService.clear();
     userEntityService.clear();
     paymentEntityService.clear();
-    broker.clearEvents();
     retryHandler.clearRetries();
     await module.close();
   });
@@ -136,29 +124,6 @@ describe('Multi-Workflow Integration E2E', () => {
       assertEntityState(updatedOrder!, orderEntityService, OrderState.PROCESSING);
       assertEntityState(updatedUser!, userEntityService, OnboardingState.EMAIL_VERIFICATION);
       assertEntityState(updatedPayment!, paymentEntityService, PaymentState.AUTHORIZING);
-    });
-  });
-
-  describe('Broker Event Isolation', () => {
-    test('should emit events from different workflows to same broker', async () => {
-      const order = await orderEntityService.create();
-      order.items = [{ name: 'Product 1', quantity: 1, price: 100 }];
-      await orderEntityService.update(order, OrderState.PROCESSING);
-
-      const user = await userEntityService.create();
-      await userEntityService.update(user, OnboardingState.REGISTRATION);
-
-      // Process both workflows
-      await orchestrator.transit(createWorkflowEvent(OrderEvent.PROCESSING, order.id));
-      await orchestrator.transit(createWorkflowEvent(OnboardingEvent.REGISTERED, user.id));
-
-      // Verify broker received events from both workflows
-      const orderEvents = broker.getEventsByTopic('order.shipment.notification');
-      const userEvents = broker.getEventsByTopic('user.email.verification.sent');
-
-      expect(orderEvents.length).toBeGreaterThan(0);
-      expect(userEvents.length).toBeGreaterThan(0);
-      expect(broker.getEventCount()).toBe(orderEvents.length + userEvents.length);
     });
   });
 

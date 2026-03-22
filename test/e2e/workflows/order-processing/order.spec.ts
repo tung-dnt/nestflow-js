@@ -2,19 +2,16 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { WorkflowModule } from '@/core/workflow.module';
 import { OrchestratorService } from '@/core/providers/orchestrator.service';
-import { MockBrokerService } from '../../fixtures/mock-broker.service';
-import { assertEntityState, assertBrokerEvent, createWorkflowEvent } from '../../fixtures/test-helpers';
-import { OrderWorkflow, OrderEvent, ORDER_ENTITY_TOKEN, ORDER_BROKER_TOKEN } from './order.workflow';
+import { assertEntityState, createWorkflowEvent } from '../../fixtures/test-helpers';
+import { OrderWorkflow, OrderEvent, ORDER_ENTITY_TOKEN } from './order.workflow';
 import { OrderEntityService, OrderState } from './order.entity';
 
 describe('Order Processing Workflow E2E', () => {
   let module: TestingModule;
   let orchestrator: OrchestratorService;
   let entityService: OrderEntityService;
-  let broker: MockBrokerService;
 
   beforeEach(async () => {
-    broker = new MockBrokerService();
     entityService = new OrderEntityService();
 
     module = await Test.createTestingModule({
@@ -22,7 +19,6 @@ describe('Order Processing Workflow E2E', () => {
         WorkflowModule.register({
           entities: [{ provide: ORDER_ENTITY_TOKEN, useValue: entityService }],
           workflows: [OrderWorkflow],
-          brokers: [{ provide: ORDER_BROKER_TOKEN, useValue: broker }],
         }),
       ],
     }).compile();
@@ -33,7 +29,6 @@ describe('Order Processing Workflow E2E', () => {
 
   afterEach(async () => {
     entityService.clear();
-    broker.clearEvents();
     await module.close();
   });
 
@@ -56,9 +51,6 @@ describe('Order Processing Workflow E2E', () => {
       updatedOrder = await entityService.load(order.id);
       expect(updatedOrder).toBeDefined();
       assertEntityState(updatedOrder!, entityService, OrderState.SHIPPED);
-
-      // Verify broker event
-      assertBrokerEvent(broker, 'order.shipment.notification', order.id);
     });
   });
 
@@ -152,22 +144,6 @@ describe('Order Processing Workflow E2E', () => {
       await expect(
         orchestrator.transit(createWorkflowEvent(OrderEvent.CREATED, 'non-existent-order', { approved: true })),
       ).rejects.toThrow();
-    });
-  });
-
-  describe('Broker Integration', () => {
-    test('should emit broker event when order is shipped', async () => {
-      const order = await entityService.create();
-      order.items = [{ name: 'Product 1', quantity: 1, price: 50 }];
-      await entityService.update(order, OrderState.PROCESSING);
-
-      await orchestrator.transit(createWorkflowEvent(OrderEvent.PROCESSING, order.id));
-
-      assertBrokerEvent(broker, 'order.shipment.notification', order.id);
-      const events = broker.getEventsByTopic('order.shipment.notification');
-      expect(events).toHaveLength(1);
-      expect(events[0].payload).toHaveProperty('orderId', order.id);
-      expect(events[0].payload).toHaveProperty('customerId', order.customerId);
     });
   });
 

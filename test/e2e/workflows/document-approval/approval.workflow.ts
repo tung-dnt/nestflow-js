@@ -1,5 +1,4 @@
-import { Inject, Logger } from '@nestjs/common';
-import type { IBrokerPublisher } from '@/event-bus';
+import { Logger } from '@nestjs/common';
 import { Entity, OnDefault, OnEvent, Payload, Workflow } from '@/core';
 
 import type { Document } from './document.entity';
@@ -15,7 +14,6 @@ export enum ApprovalEvent {
 }
 
 export const APPROVAL_ENTITY_TOKEN = 'entity.document';
-export const APPROVAL_BROKER_TOKEN = 'broker.document';
 
 @Workflow<Document, ApprovalEvent, DocumentState>({
   name: 'DocumentApprovalWorkflow',
@@ -62,25 +60,15 @@ export const APPROVAL_BROKER_TOKEN = 'broker.document';
     },
   ],
   entityService: APPROVAL_ENTITY_TOKEN,
-  brokerPublisher: APPROVAL_BROKER_TOKEN,
 })
 export class DocumentApprovalWorkflow {
   private readonly logger = new Logger(DocumentApprovalWorkflow.name);
 
-  constructor(
-    @Inject(APPROVAL_BROKER_TOKEN)
-    private readonly brokerPublisher: IBrokerPublisher,
-  ) {}
+  constructor() {}
 
   @OnEvent(ApprovalEvent.SUBMITTED)
   async handleSubmitted(@Entity() document: Document) {
     this.logger.log(`Document ${document.id} submitted for review`);
-    await this.brokerPublisher.emit({
-      topic: 'document.review.requested',
-      urn: document.id,
-      attempt: 0,
-      payload: { documentId: document.id, approvers: document.approvers },
-    });
     return { submittedAt: new Date().toISOString() };
   }
 
@@ -97,12 +85,6 @@ export class DocumentApprovalWorkflow {
   @OnEvent(ApprovalEvent.REJECTED)
   async handleRejected(@Entity() document: Document, @Payload() payload: any) {
     this.logger.log(`Document ${document.id} rejected by ${payload?.approverId}`);
-    await this.brokerPublisher.emit({
-      topic: 'document.rejected',
-      urn: document.id,
-      attempt: 0,
-      payload: { documentId: document.id, reason: payload?.reason },
-    });
     return { rejectedAt: new Date().toISOString() };
   }
 

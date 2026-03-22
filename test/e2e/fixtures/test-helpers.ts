@@ -1,12 +1,11 @@
-import type { IWorkflowEvent } from '@/event-bus';
 import type { IWorkflowEntity } from '@/core';
 
 /**
  * Create a workflow event for testing
  */
-export function createWorkflowEvent(topic: string, urn: string | number, payload?: any, attempt = 0): IWorkflowEvent {
+export function createWorkflowEvent(event: string, urn: string | number, payload?: any, attempt = 0) {
   return {
-    topic,
+    event,
     urn,
     payload,
     attempt,
@@ -42,27 +41,4 @@ export async function waitFor(condition: () => boolean, timeout = 5000, interval
  */
 export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Assert broker event was emitted
- */
-export function assertBrokerEvent(
-  broker: { hasEvent: (topic: string, urn?: string | number) => boolean },
-  topic: string,
-  urn?: string | number,
-): void {
-  if (!broker.hasEvent(topic, urn)) {
-    throw new Error(`Expected broker event "${topic}"${urn ? ` for URN "${urn}"` : ''} was not emitted`);
-  }
-}
-
-/**
- * Assert broker event count
- */
-export function assertBrokerEventCount(broker: { getEventCount: () => number }, expectedCount: number): void {
-  const actualCount = broker.getEventCount();
-  if (actualCount !== expectedCount) {
-    throw new Error(`Expected ${expectedCount} broker events but got ${actualCount}`);
-  }
 }

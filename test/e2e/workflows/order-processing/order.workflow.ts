@@ -1,5 +1,4 @@
-import { Inject, Logger } from '@nestjs/common';
-import type { IBrokerPublisher } from '@/event-bus';
+import { Logger } from '@nestjs/common';
 import { Entity, OnDefault, OnEvent, Payload, Workflow } from '@/core';
 import { UnretriableException } from '@/exception';
 
@@ -15,7 +14,6 @@ export enum OrderEvent {
 }
 
 export const ORDER_ENTITY_TOKEN = 'entity.order';
-export const ORDER_BROKER_TOKEN = 'broker.order';
 
 @Workflow<Order, OrderEvent, OrderState>({
   name: 'OrderWorkflow',
@@ -44,15 +42,11 @@ export const ORDER_BROKER_TOKEN = 'broker.order';
     },
   ],
   entityService: ORDER_ENTITY_TOKEN,
-  brokerPublisher: ORDER_BROKER_TOKEN,
 })
 export class OrderWorkflow {
   private readonly logger = new Logger(OrderWorkflow.name);
 
-  constructor(
-    @Inject(ORDER_BROKER_TOKEN)
-    private readonly brokerPublisher: IBrokerPublisher,
-  ) {}
+  constructor() {}
 
   @OnEvent(OrderEvent.CREATED)
   async handleOrderCreated(@Entity() order: Order, @Payload() payload: any) {
@@ -66,12 +60,6 @@ export class OrderWorkflow {
   @OnEvent(OrderEvent.PROCESSING)
   async handleOrderProcessing(@Entity() order: Order, @Payload() payload: any) {
     this.logger.log(`Processing order ${order.id}`);
-    await this.brokerPublisher.emit({
-      topic: 'order.shipment.notification',
-      urn: order.id,
-      attempt: 0,
-      payload: { orderId: order.id, customerId: order.customerId },
-    });
     return { shippedAt: new Date().toISOString() };
   }
 

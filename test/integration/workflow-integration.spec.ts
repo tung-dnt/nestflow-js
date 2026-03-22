@@ -11,7 +11,6 @@ describe('Workflow Integration Tests', () => {
         WorkflowModule.register({
           entities: [],
           workflows: [],
-          brokers: [],
         }),
       ],
     }).compile();
@@ -34,7 +33,7 @@ describe('Workflow Integration Tests', () => {
       expect(true).toBe(true);
     });
 
-    test('should emit events to broker', async () => {
+    test('should handle workflow event emission', async () => {
       // Add integration test for event emission
       expect(true).toBe(true);
     });

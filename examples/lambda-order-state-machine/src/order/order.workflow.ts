@@ -1,10 +1,9 @@
-import { Inject, Logger } from '@nestjs/common';
-import type { IBrokerPublisher } from 'nestjs-serverless-workflow/event-bus';
+import { Logger } from '@nestjs/common';
 import { Entity, OnDefault, OnEvent, Payload, Workflow } from 'nestjs-serverless-workflow/core';
 
 import type { Order } from '../dynamodb/order.table';
 import { OrderState } from '../dynamodb/order.table';
-import { ORDER_WORKFLOW_BROKER, ORDER_WORKFLOW_ENTITY, OrderEvent } from './order.constant';
+import { ORDER_WORKFLOW_ENTITY, OrderEvent } from './order.constant';
 
 @Workflow<Order, OrderEvent, OrderState>({
   name: 'OrderWorkflow',
@@ -33,15 +32,11 @@ import { ORDER_WORKFLOW_BROKER, ORDER_WORKFLOW_ENTITY, OrderEvent } from './orde
     },
   ],
   entityService: ORDER_WORKFLOW_ENTITY,
-  brokerPublisher: ORDER_WORKFLOW_BROKER,
 })
 export class OrderWorkflow {
   private readonly logger = new Logger(OrderWorkflow.name);
 
-  constructor(
-    @Inject(ORDER_WORKFLOW_BROKER)
-    private readonly brokerPublisher: IBrokerPublisher,
-  ) {}
+  constructor() {}
 
   @OnEvent(OrderEvent.CREATED)
   async handleOrderCreated(@Entity() order: Order, @Payload() payload: any) {
@@ -62,13 +57,6 @@ export class OrderWorkflow {
   async handleOrderProcessed(@Entity() order: Order, @Payload() payload: any) {
     this.logger.log(`handleOrderProcessed called for order ${order.id} payload=${JSON.stringify(payload)}`);
     // perhaps notify customer, create shipment, etc.
-    // Optionally publish to broker:
-    await this.brokerPublisher.emit({
-      topic: 'order.shipment',
-      attempt: 0,
-      urn: order.id,
-      payload: { orderId: order.id },
-    });
     return { shippedAt: new Date().toISOString() };
   }
 

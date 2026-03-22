@@ -1,7 +1,6 @@
 import { type DynamicModule, Module, type Provider } from '@nestjs/common';
 import { DiscoveryModule } from '@nestjs/core';
 import { OrchestratorService, StateRouterHelperFactory } from '@/core';
-import type { IBrokerPublisher } from '@/event-bus';
 
 import type { IWorkflowEntity } from './types';
 
@@ -11,12 +10,11 @@ export class WorkflowModule {
     imports?: any[];
     entities: Provider<IWorkflowEntity>[];
     workflows: Provider[];
-    brokers: Provider<IBrokerPublisher>[];
     providers?: Provider[];
   }): DynamicModule {
-    const { imports, entities, workflows, brokers, providers: extraProviders } = options;
+    const { imports, entities, workflows, providers: extraProviders } = options;
 
-    const providers = [...entities, ...workflows, ...brokers, ...(extraProviders ?? []), StateRouterHelperFactory, OrchestratorService];
+    const providers = [...entities, ...workflows, ...(extraProviders ?? []), StateRouterHelperFactory, OrchestratorService];
 
     return {
       module: WorkflowModule,

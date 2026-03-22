@@ -2,13 +2,11 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { WorkflowModule } from '@/core/workflow.module';
 import { OrchestratorService } from '@/core/providers/orchestrator.service';
-import { MockBrokerService } from '../../fixtures/mock-broker.service';
-import { assertEntityState, assertBrokerEvent, createWorkflowEvent } from '../../fixtures/test-helpers';
+import { assertEntityState, createWorkflowEvent } from '../../fixtures/test-helpers';
 import {
   UserOnboardingWorkflow,
   OnboardingEvent,
   ONBOARDING_ENTITY_TOKEN,
-  ONBOARDING_BROKER_TOKEN,
 } from './onboarding.workflow';
 import { UserEntityService, OnboardingState } from './user.entity';
 
@@ -16,10 +14,8 @@ describe('User Onboarding Workflow E2E', () => {
   let module: TestingModule;
   let orchestrator: OrchestratorService;
   let entityService: UserEntityService;
-  let broker: MockBrokerService;
 
   beforeEach(async () => {
-    broker = new MockBrokerService();
     entityService = new UserEntityService();
 
     module = await Test.createTestingModule({
@@ -27,7 +23,6 @@ describe('User Onboarding Workflow E2E', () => {
         WorkflowModule.register({
           entities: [{ provide: ONBOARDING_ENTITY_TOKEN, useValue: entityService }],
           workflows: [UserOnboardingWorkflow],
-          brokers: [{ provide: ONBOARDING_BROKER_TOKEN, useValue: broker }],
         }),
       ],
     }).compile();
@@ -38,7 +33,6 @@ describe('User Onboarding Workflow E2E', () => {
 
   afterEach(async () => {
     entityService.clear();
-    broker.clearEvents();
     await module.close();
   });
 
@@ -53,7 +47,6 @@ describe('User Onboarding Workflow E2E', () => {
       let updatedUser = await entityService.load(user.id);
       expect(updatedUser).toBeDefined();
       assertEntityState(updatedUser!, entityService, OnboardingState.EMAIL_VERIFICATION);
-      assertBrokerEvent(broker, 'user.email.verification.sent', user.id);
 
       // Step 2: Email verification
       await orchestrator.transit(createWorkflowEvent(OnboardingEvent.EMAIL_VERIFIED, user.id));
@@ -70,7 +63,6 @@ describe('User Onboarding Workflow E2E', () => {
       );
       updatedUser = await entityService.load(user.id);
       assertEntityState(updatedUser!, entityService, OnboardingState.COMPLETED);
-      assertBrokerEvent(broker, 'user.onboarding.completed', user.id);
     });
 
     test('should complete onboarding for business user', async () => {
@@ -186,37 +178,6 @@ describe('User Onboarding Workflow E2E', () => {
 
       const updatedUser = await entityService.load(user.id);
       assertEntityState(updatedUser!, entityService, OnboardingState.ABANDONED);
-    });
-  });
-
-  describe('Broker Integration', () => {
-    test('should emit email verification event on registration', async () => {
-      const user = await entityService.create();
-      await entityService.update(user, OnboardingState.REGISTRATION);
-
-      await orchestrator.transit(createWorkflowEvent(OnboardingEvent.REGISTERED, user.id));
-
-      assertBrokerEvent(broker, 'user.email.verification.sent', user.id);
-      const events = broker.getEventsByTopic('user.email.verification.sent');
-      expect(events[0].payload).toHaveProperty('email', user.email);
-      expect(events[0].payload).toHaveProperty('userId', user.id);
-    });
-
-    test('should emit completion event when profile setup is complete', async () => {
-      const user = await entityService.create();
-      user.userType = 'individual';
-      await entityService.update(user, OnboardingState.PROFILE_SETUP);
-
-      await orchestrator.transit(
-        createWorkflowEvent(OnboardingEvent.PROFILE_SETUP, user.id, {
-          profileData: { firstName: 'John', lastName: 'Doe' },
-        }),
-      );
-
-      assertBrokerEvent(broker, 'user.onboarding.completed', user.id);
-      const events = broker.getEventsByTopic('user.onboarding.completed');
-      expect(events[0].payload).toHaveProperty('userId', user.id);
-      expect(events[0].payload).toHaveProperty('userType', 'individual');
     });
   });
 

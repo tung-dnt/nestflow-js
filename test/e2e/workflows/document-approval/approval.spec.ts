@@ -2,13 +2,11 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { WorkflowModule } from '@/core/workflow.module';
 import { OrchestratorService } from '@/core/providers/orchestrator.service';
-import { MockBrokerService } from '../../fixtures/mock-broker.service';
-import { assertEntityState, assertBrokerEvent, createWorkflowEvent } from '../../fixtures/test-helpers';
+import { assertEntityState, createWorkflowEvent } from '../../fixtures/test-helpers';
 import {
   DocumentApprovalWorkflow,
   ApprovalEvent,
   APPROVAL_ENTITY_TOKEN,
-  APPROVAL_BROKER_TOKEN,
 } from './approval.workflow';
 import { DocumentEntityService, DocumentState } from './document.entity';
 
@@ -16,10 +14,8 @@ describe('Document Approval Workflow E2E', () => {
   let module: TestingModule;
   let orchestrator: OrchestratorService;
   let entityService: DocumentEntityService;
-  let broker: MockBrokerService;
 
   beforeEach(async () => {
-    broker = new MockBrokerService();
     entityService = new DocumentEntityService();
 
     module = await Test.createTestingModule({
@@ -27,7 +23,6 @@ describe('Document Approval Workflow E2E', () => {
         WorkflowModule.register({
           entities: [{ provide: APPROVAL_ENTITY_TOKEN, useValue: entityService }],
           workflows: [DocumentApprovalWorkflow],
-          brokers: [{ provide: APPROVAL_BROKER_TOKEN, useValue: broker }],
         }),
       ],
     }).compile();
@@ -38,7 +33,6 @@ describe('Document Approval Workflow E2E', () => {
 
   afterEach(async () => {
     entityService.clear();
-    broker.clearEvents();
     await module.close();
   });
 
@@ -55,7 +49,6 @@ describe('Document Approval Workflow E2E', () => {
       await orchestrator.transit(createWorkflowEvent(ApprovalEvent.SUBMITTED, document.id));
       let updatedDocument = await entityService.load(document.id);
       assertEntityState(updatedDocument!, entityService, DocumentState.PENDING_REVIEW);
-      assertBrokerEvent(broker, 'document.review.requested', document.id);
 
       // Approve (single approval for policy)
       updatedDocument!.approvals = [{ approverId: 'approver1', approved: true, timestamp: new Date().toISOString() }];
@@ -89,7 +82,6 @@ describe('Document Approval Workflow E2E', () => {
 
       updatedDocument = await entityService.load(document.id);
       assertEntityState(updatedDocument!, entityService, DocumentState.REJECTED);
-      assertBrokerEvent(broker, 'document.rejected', document.id);
     });
   });
 
@@ -199,37 +191,6 @@ describe('Document Approval Workflow E2E', () => {
       // Should still be in PENDING_REVIEW
       const updatedDocument = await entityService.load(document.id);
       assertEntityState(updatedDocument!, entityService, DocumentState.PENDING_REVIEW);
-    });
-  });
-
-  describe('Broker Integration', () => {
-    test('should emit review requested event on submission', async () => {
-      const document = await entityService.create();
-      document.approvers = ['approver1'];
-      await entityService.update(document, DocumentState.DRAFT);
-
-      await orchestrator.transit(createWorkflowEvent(ApprovalEvent.SUBMITTED, document.id));
-
-      assertBrokerEvent(broker, 'document.review.requested', document.id);
-      const events = broker.getEventsByTopic('document.review.requested');
-      expect(events[0].payload).toHaveProperty('documentId', document.id);
-      expect(events[0].payload).toHaveProperty('approvers', ['approver1']);
-    });
-
-    test('should emit rejected event on rejection', async () => {
-      const document = await entityService.create();
-      await entityService.update(document, DocumentState.PENDING_REVIEW);
-
-      await orchestrator.transit(
-        createWorkflowEvent(ApprovalEvent.REJECTED, document.id, {
-          approverId: 'approver1',
-          reason: 'Not suitable',
-        }),
-      );
-
-      assertBrokerEvent(broker, 'document.rejected', document.id);
-      const events = broker.getEventsByTopic('document.rejected');
-      expect(events[0].payload).toHaveProperty('reason', 'Not suitable');
     });
   });
 

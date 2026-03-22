@@ -11,7 +11,6 @@ describe('WorkflowModule', () => {
         WorkflowModule.register({
           entities: [],
           workflows: [],
-          brokers: [],
         }),
       ],
     }).compile();

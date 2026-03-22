@@ -2,14 +2,12 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { WorkflowModule } from '@/core/workflow.module';
 import { OrchestratorService } from '@/core/providers/orchestrator.service';
-import { MockBrokerService } from '../../fixtures/mock-broker.service';
 import { MockRetryHandler } from '../../fixtures/mock-retry-handler.service';
-import { assertEntityState, assertBrokerEvent, createWorkflowEvent } from '../../fixtures/test-helpers';
+import { assertEntityState, createWorkflowEvent } from '../../fixtures/test-helpers';
 import {
   PaymentWorkflow,
   PaymentEvent,
   PAYMENT_ENTITY_TOKEN,
-  PAYMENT_BROKER_TOKEN,
   PAYMENT_RETRY_HANDLER_TOKEN,
 } from './payment.workflow';
 import { PaymentEntityService, PaymentState } from './payment.entity';
@@ -18,12 +16,10 @@ describe('Payment Processing Workflow E2E', () => {
   let module: TestingModule;
   let orchestrator: OrchestratorService;
   let entityService: PaymentEntityService;
-  let broker: MockBrokerService;
   let retryHandler: MockRetryHandler;
   let workflow: PaymentWorkflow;
 
   beforeEach(async () => {
-    broker = new MockBrokerService();
     entityService = new PaymentEntityService();
     retryHandler = new MockRetryHandler();
 
@@ -32,7 +28,6 @@ describe('Payment Processing Workflow E2E', () => {
         WorkflowModule.register({
           entities: [{ provide: PAYMENT_ENTITY_TOKEN, useValue: entityService }],
           workflows: [PaymentWorkflow],
-          brokers: [{ provide: PAYMENT_BROKER_TOKEN, useValue: broker }],
         }),
       ],
       providers: [{ provide: PAYMENT_RETRY_HANDLER_TOKEN, useValue: retryHandler }],
@@ -45,7 +40,6 @@ describe('Payment Processing Workflow E2E', () => {
 
   afterEach(async () => {
     entityService.clear();
-    broker.clearEvents();
     retryHandler.clearRetries();
     workflow.setSimulateNetworkError(false);
     workflow.setSimulateInvalidCard(false);
@@ -75,9 +69,6 @@ describe('Payment Processing Workflow E2E', () => {
       await orchestrator.transit(createWorkflowEvent(PaymentEvent.CAPTURED, payment.id));
       updatedPayment = await entityService.load(payment.id);
       assertEntityState(updatedPayment!, entityService, PaymentState.COMPLETED);
-
-      // Verify broker event
-      assertBrokerEvent(broker, 'payment.completed', payment.id);
     });
   });
 
@@ -151,11 +142,6 @@ describe('Payment Processing Workflow E2E', () => {
 
       const updatedPayment = await entityService.load(payment.id);
       assertEntityState(updatedPayment!, entityService, PaymentState.REFUNDED);
-
-      // Verify broker event
-      assertBrokerEvent(broker, 'payment.refunded', payment.id);
-      const events = broker.getEventsByTopic('payment.refunded');
-      expect(events[0].payload).toHaveProperty('refundId', 'REF-123');
     });
 
     test('should not allow refund from non-completed state', async () => {
@@ -194,31 +180,6 @@ describe('Payment Processing Workflow E2E', () => {
 
       const updatedPayment = await entityService.load(payment.id);
       assertEntityState(updatedPayment!, entityService, PaymentState.FAILED);
-    });
-  });
-
-  describe('Broker Integration', () => {
-    test('should emit payment completed event on capture', async () => {
-      const payment = await entityService.create();
-      payment.amount = 100;
-      await entityService.update(payment, PaymentState.CAPTURING);
-
-      await orchestrator.transit(createWorkflowEvent(PaymentEvent.CAPTURED, payment.id));
-
-      assertBrokerEvent(broker, 'payment.completed', payment.id);
-      const events = broker.getEventsByTopic('payment.completed');
-      expect(events[0].payload).toHaveProperty('paymentId', payment.id);
-      expect(events[0].payload).toHaveProperty('amount', 100);
-    });
-
-    test('should emit refund event on refund', async () => {
-      const payment = await entityService.create();
-      payment.amount = 100;
-      await entityService.update(payment, PaymentState.COMPLETED);
-
-      await orchestrator.transit(createWorkflowEvent(PaymentEvent.REFUNDED, payment.id, { refundId: 'REF-456' }));
-
-      assertBrokerEvent(broker, 'payment.refunded', payment.id);
     });
   });
 

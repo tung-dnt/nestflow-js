@@ -1,5 +1,4 @@
-import { Inject, Logger } from '@nestjs/common';
-import type { IBrokerPublisher } from '@/event-bus';
+import { Logger } from '@nestjs/common';
 import { Entity, OnDefault, OnEvent, Payload, Workflow } from '@/core';
 
 import type { User } from './user.entity';
@@ -14,7 +13,6 @@ export enum OnboardingEvent {
 }
 
 export const ONBOARDING_ENTITY_TOKEN = 'entity.user';
-export const ONBOARDING_BROKER_TOKEN = 'broker.user';
 
 @Workflow<User, OnboardingEvent, OnboardingState>({
   name: 'UserOnboardingWorkflow',
@@ -54,26 +52,15 @@ export const ONBOARDING_BROKER_TOKEN = 'broker.user';
     },
   ],
   entityService: ONBOARDING_ENTITY_TOKEN,
-  brokerPublisher: ONBOARDING_BROKER_TOKEN,
 })
 export class UserOnboardingWorkflow {
   private readonly logger = new Logger(UserOnboardingWorkflow.name);
 
-  constructor(
-    @Inject(ONBOARDING_BROKER_TOKEN)
-    private readonly brokerPublisher: IBrokerPublisher,
-  ) {}
+  constructor() {}
 
   @OnEvent(OnboardingEvent.REGISTERED)
   async handleRegistration(@Entity() user: User, @Payload() payload: any) {
     this.logger.log(`User ${user.id} registered`);
-    // Send verification email
-    await this.brokerPublisher.emit({
-      topic: 'user.email.verification.sent',
-      urn: user.id,
-      attempt: 0,
-      payload: { email: user.email, userId: user.id },
-    });
     return { registeredAt: new Date().toISOString() };
   }
 
@@ -86,13 +73,6 @@ export class UserOnboardingWorkflow {
   @OnEvent(OnboardingEvent.PROFILE_SETUP)
   async handleProfileSetup(@Entity() user: User, @Payload() payload: any) {
     this.logger.log(`User ${user.id} profile setup`);
-    const updatedUser = { ...user, profileData: payload.profileData, profileComplete: true };
-    await this.brokerPublisher.emit({
-      topic: 'user.onboarding.completed',
-      urn: user.id,
-      attempt: 0,
-      payload: { userId: user.id, userType: user.userType },
-    });
     return { profileData: payload.profileData };
   }
 

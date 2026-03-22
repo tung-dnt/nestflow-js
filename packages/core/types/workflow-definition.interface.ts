@@ -1,5 +1,4 @@
 import type { IBackoffRetryConfig, ITransitionEvent, IWorkflowEntity } from '@/core';
-import type { IBrokerPublisher } from '@/event-bus';
 
 /**
  * Defines the structure of a workflow definition, which includes the following properties:
@@ -20,21 +19,10 @@ export interface IWorkflowDefinition<T, Event, State> {
   };
   transitions: ITransitionEvent<T, Event, State, any>[];
   conditions?: (<P>(entity: T, payload?: P | T | object | string) => boolean)[];
-
-  /**
-   * TODO: When serverless function is about to timeout, register this callback to checkpoint current entity state
-   */
-  onTimeout?: (<P>(entity: T, event: Event, payload?: P | T | object | string) => Promise<any>)[];
-
   /**
    * Injection token refer to entity services that implements IWorkflowEntity<T>
    */
   entityService: string;
-
-  /**
-   * Injection token refer to broker publisher that implements IBrokerPublisher
-   */
-  brokerPublisher: string;
 }
 
 export interface IWorkflowDefaultRoute {
@@ -44,7 +32,6 @@ export interface IWorkflowDefaultRoute {
   handler: (...payload: any[]) => Promise<any>;
   defaultHandler?: TDefaultHandler<any>;
   entityService: IWorkflowEntity;
-  brokerPublisher: IBrokerPublisher;
   retryConfig?: IBackoffRetryConfig;
 }
 
