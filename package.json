@@ -1,6 +1,6 @@
 {
   "name": "nestflow-js",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": false,
   "description": "Workflow and State Machines for NestJS",
   "license": "MIT",
