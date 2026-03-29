@@ -4,7 +4,7 @@ import { themes as prismThemes } from 'prism-react-renderer';
 import TsconfigPathsPlugin from 'tsconfig-paths-webpack-plugin';
 
 const config: Config = {
-  title: 'NestJS Serverless Workflow',
+  title: 'NestflowJS',
   tagline: 'Workflow and State Machines for NestJS',
   favicon: 'img/logo.jpeg',
 
@@ -59,9 +59,9 @@ const config: Config = {
     // Replace with your project's social card
     image: 'img/logo.jpeg',
     navbar: {
-      title: 'NestJS Serverless Workflow',
+      title: 'NestflowJS',
       logo: {
-        alt: 'NestJS Serverless Workflow Logo',
+        alt: 'NestflowJS Logo',
         src: 'img/logo.jpeg',
       },
       items: [

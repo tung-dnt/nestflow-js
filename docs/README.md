@@ -1,6 +1,6 @@
 # Documentation
 
-This directory contains the Docusaurus documentation site for NestJS Serverless Workflow.
+This directory contains the Docusaurus documentation site for NestflowJS.
 
 ## Development
 

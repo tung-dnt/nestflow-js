@@ -104,7 +104,7 @@ export default function HomepageFeatures(): JSX.Element {
     <section className={styles.featuresSection}>
       <div className="container">
         <Heading as="h2" className="sectionTitle">
-          Why NestJS Serverless Workflow?
+          Why NestflowJS?
         </Heading>
         <p className="sectionSubtitle">
           A modern workflow engine that gets out of your way and lets you focus on business logic
