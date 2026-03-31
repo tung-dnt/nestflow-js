@@ -1,6 +1,9 @@
 name: Release
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       version_type:
@@ -21,159 +24,123 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Skip bot commits to avoid infinite loop
+    if: "!contains(github.event.head_commit.message, 'chore: bump version')"
     permissions:
       contents: write
       id-token: write
 
     steps:
-      - name: Checkout code
+      - name: 📥 Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure Git
+      - name: 🔧 Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Setup Bun
+      - name: 🍞 Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Install dependencies
+      - name: 📦 Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Run tests
+      - name: 🧪 Run tests
         run: bun test
         continue-on-error: true
 
-      - name: Type check
+      - name: 🔍 Type check
         run: bun run typecheck
 
-      - name: Build package
+      - name: 🏗️ Build package
         run: bun run build
 
-      - name: Verify build output
+      - name: ✅ Verify build output
         run: |
-          echo "Checking dist directory..."
+          echo "📂 Checking dist directory..."
           ls -la dist/
-          echo "Checking package files..."
-          ls -la dist/workflow/ || echo "Warning: workflow directory not found"
-          ls -la dist/event-bus/ || echo "Warning: event-bus directory not found"
-          ls -la dist/adapter/ || echo "Warning: adapter directory not found"
-          ls -la dist/exception/ || echo "Warning: exception directory not found"
+          echo "📋 Checking package files..."
+          ls -la dist/workflow/ || echo "⚠️ workflow directory not found"
+          ls -la dist/event-bus/ || echo "⚠️ event-bus directory not found"
+          ls -la dist/adapter/ || echo "⚠️ adapter directory not found"
+          ls -la dist/exception/ || echo "⚠️ exception directory not found"
 
-      - name: Setup Node.js
+      - name: 🟢 Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Bump version
+      - name: 🔖 Bump version and generate CHANGELOG
         id: version
         run: |
-          # Get current version
-          CURRENT_VERSION=$(jq -r '.version' package.json)
-          echo "Current version: $CURRENT_VERSION"
+          # Use explicit version type for manual dispatch, auto-detect from commits for push trigger
+          VERSION_TYPE="${{ inputs.version_type }}"
 
-          # Bump version using npm
-          NEW_VERSION=$(npm version ${{ inputs.version_type }} --no-git-tag-version)
-          echo "New version: $NEW_VERSION"
+          if [ -n "$VERSION_TYPE" ]; then
+            echo "📌 Manual dispatch: bumping $VERSION_TYPE"
+            npx changelogen@latest --bump --"$VERSION_TYPE" --no-tag --no-commit
+          else
+            echo "🤖 Auto-detecting version bump from conventional commits..."
+            npx changelogen@latest --bump --no-tag --no-commit
+          fi
 
-          # Export for later steps
+          # Read the new version from package.json
+          NEW_VERSION="v$(jq -r '.version' package.json)"
+          echo "🏷️ New version: $NEW_VERSION"
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "version_number=${NEW_VERSION#v}" >> $GITHUB_OUTPUT
 
-      - name: Update CHANGELOG
-        run: |
-          VERSION="${{ steps.version.outputs.version_number }}"
-          DATE=$(date +%Y-%m-%d)
+          # Capture changelog content for GitHub Release body
+          CHANGELOG_CONTENT=$(npx changelogen@latest --no-bump)
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG_CONTENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-          # Create changelog entry
-          cat > CHANGELOG_ENTRY.md << EOF
-          ## [$VERSION] - $DATE
-
-          ### Changed
-          - Version bump to $VERSION
-
-          EOF
-
-          # Prepend to CHANGELOG.md if it exists
-          if [ -f CHANGELOG.md ]; then
-            cat CHANGELOG_ENTRY.md CHANGELOG.md > CHANGELOG.tmp
-            mv CHANGELOG.tmp CHANGELOG.md
-          else
-            mv CHANGELOG_ENTRY.md CHANGELOG.md
-          fi
-
-          rm -f CHANGELOG_ENTRY.md
-
-      - name: Commit version bump
+      - name: 💾 Commit version bump
         run: |
           git add package.json CHANGELOG.md
           git commit -m "chore: bump version to ${{ steps.version.outputs.new_version }}"
           git tag ${{ steps.version.outputs.new_version }}
 
-      - name: Push changes
+      - name: 🚀 Push changes
         run: |
           git push origin main
           git push origin ${{ steps.version.outputs.new_version }}
 
-      - name: Publish to NPM
+      - name: 📤 Publish to NPM
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Create GitHub Release
+      - name: 🎉 Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.new_version }}
           name: Release ${{ steps.version.outputs.new_version }}
           body: |
-            ## 🚀 Release ${{ steps.version.outputs.new_version }}
+            ${{ steps.version.outputs.content }}
 
             ### Installation
 
             ```bash
-            npm install nestjs-serverless-workflow@${{ steps.version.outputs.version_number }}
+            npm install nestflow-js@${{ steps.version.outputs.version_number }}
             ```
 
-            ### What's Changed
-
-            See [CHANGELOG.md](https://github.com/tung-dnt/nestjs-serverless-workflow/blob/main/CHANGELOG.md) for full details.
-
-            ### Package Exports
-
-            ```typescript
-            import { WorkflowModule } from 'nestjs-serverless-workflow/core';
-            import { LambdaEventHandler } from 'nestjs-serverless-workflow/adapter';
-            import { IBrokerPublisher } from 'nestjs-serverless-workflow/event-bus';
-            import { UnretriableException } from 'nestjs-serverless-workflow/exception';
-            ```
-
-            ### Documentation
-
-            📚 **[Full Documentation](https://tung-dnt.github.io/nestjs-serverless-workflow/)**
-
-            - [Getting Started](https://tung-dnt.github.io/nestjs-serverless-workflow/docs/getting-started)
-            - [API Reference](https://tung-dnt.github.io/nestjs-serverless-workflow/docs/api-reference/workflow-module)
-            - [Examples](https://tung-dnt.github.io/nestjs-serverless-workflow/docs/examples/lambda-order-state-machine)
-
-            ### Links
-
-            📦 **NPM**: https://www.npmjs.com/package/nestjs-serverless-workflow
-            🐛 **Issues**: https://github.com/tung-dnt/nestjs-serverless-workflow/issues
-            💬 **Discussions**: https://github.com/tung-dnt/nestjs-serverless-workflow/discussions
+            **[Full Documentation](https://nestflow.organit.dev)** | **[NPM](https://www.npmjs.com/package/nestflow-js)**
           draft: false
-          prerelease: ${{ inputs.prerelease }}
+          prerelease: ${{ inputs.prerelease || false }}
 
-      - name: Announce Success
+      - name: 📣 Announce Success
         run: |
-          echo "🎉 Successfully released nestjs-serverless-workflow@${{ steps.version.outputs.version_number }}"
-          echo "📦 NPM: https://www.npmjs.com/package/nestjs-serverless-workflow"
-          echo "📚 Documentation: https://tung-dnt.github.io/nestjs-serverless-workflow/"
+          echo "🎉 Successfully released nestflow-js@${{ steps.version.outputs.version_number }}"
+          echo "📦 NPM: https://www.npmjs.com/package/nestflow-js"
+          echo "📚 Documentation: https://nestflow.organit.dev"
           echo "🏷️ Tag: ${{ steps.version.outputs.new_version }}"
 
   deploy-docs:
@@ -188,35 +155,35 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
-      - name: Checkout code
+      - name: 📥 Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Bun
+      - name: 🍞 Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Setup Pages
+      - name: 📄 Setup Pages
         uses: actions/configure-pages@v5
 
-      - name: Install dependencies
+      - name: 📦 Install dependencies
         working-directory: ./docs
         run: bun install
 
-      - name: Build with Docusaurus
+      - name: 🏗️ Build with Docusaurus
         working-directory: ./docs
         run: bun run build
 
-      - name: Upload artifact
+      - name: 📤 Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./docs/build
 
-      - name: Deploy to GitHub Pages
+      - name: 🌐 Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
 
-      - name: Announce Documentation Deployment
+      - name: 📣 Announce Documentation Deployment
         run: |
           echo "📚 Documentation deployed successfully!"
-          echo "🌐 URL: https://tung-dnt.github.io/nestjs-serverless-workflow/"
+          echo "🌐 URL: https://nestflow.organit.dev"

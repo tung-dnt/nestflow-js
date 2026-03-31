@@ -43,3 +43,4 @@ Thumbs.db
 .npmrc
 
 docs/docs/README.md
+.playwright-mcp/
