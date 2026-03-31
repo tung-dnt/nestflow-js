@@ -1,3 +1,15 @@
+## v0.1.15
+
+[compare changes](https://github.com/tung-dnt/nestflow-js/compare/v0.1.14...v0.1.15)
+
+### 🚀 Enhancements
+
+- Doc search ([ca30a37](https://github.com/tung-dnt/nestflow-js/commit/ca30a37))
+
+### ❤️ Contributors
+
+- Tung-dnt <tungdnt779901@gmail.com>
+
 ## v0.1.14
 
 [compare changes](https://github.com/tung-dnt/nestflow-js/compare/v0.1.13...v0.1.14)
