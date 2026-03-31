@@ -1,3 +1,15 @@
+## v0.1.14
+
+[compare changes](https://github.com/tung-dnt/nestflow-js/compare/v0.1.13...v0.1.14)
+
+### 🏡 Chore
+
+- Package.json clean up ([21234d4](https://github.com/tung-dnt/nestflow-js/commit/21234d4))
+
+### ❤️ Contributors
+
+- Tung-dnt <tungdnt779901@gmail.com>
+
 ## v0.1.13
 
 [compare changes](https://github.com/tung-dnt/nestflow-js/compare/v0.1.12...v0.1.13)
