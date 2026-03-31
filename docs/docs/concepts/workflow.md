@@ -72,7 +72,6 @@ Marks a class as a workflow definition:
   states: { finals: [...], idles: [...], failed: ... },
   transitions: [...],
   entityService: 'entity.order',
-  brokerPublisher: 'broker.order', // optional
 })
 export class OrderWorkflow {}
 ```
@@ -114,7 +113,7 @@ Adds retry logic to a handler:
 
 ```typescript
 @OnEvent('order.payment')
-@WithRetry({ maxAttempts: 3, backoff: 'exponential' })
+@WithRetry({ handler: 'processPayment', maxAttempts: 3, strategy: RetryStrategy.EXPONENTIAL })
 async processPayment(@Entity() entity: Order) {
   // Retries up to 3 times with exponential backoff
 }

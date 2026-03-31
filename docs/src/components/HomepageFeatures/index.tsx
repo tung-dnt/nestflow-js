@@ -47,7 +47,7 @@ const FeatureList: FeatureItem[] = [
     ),
     description:
       'Checkpoint and replay execution with the Durable Lambda Adapter. Survive timeouts and resume exactly where you left off.',
-    link: '/docs/concepts/transit-result',
+    link: '/docs/concepts/adapters',
   },
   {
     title: 'Fully Type-Safe',
@@ -82,7 +82,7 @@ const FeatureList: FeatureItem[] = [
       </svg>
     ),
     description:
-      'Built-in retry with exponential and linear backoff. Handle transient failures gracefully with configurable @WithRetry policies.',
+      'Built-in retry with exponential backoff and jitter. Handle transient failures gracefully with configurable @WithRetry policies.',
     link: '/docs/api-reference/decorators',
   },
 ];

@@ -2,10 +2,11 @@ import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
 
 const sidebars: SidebarsConfig = {
   tutorialSidebar: [
+    'introduction',
     'quick-start',
     {
       type: 'category',
-      label: 'Key Concepts',
+      label: 'Core Concepts',
       items: [
         'concepts/workflow',
         'concepts/transit-result',
@@ -16,8 +17,17 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Recipes',
       items: [
+        'recipes/retry-and-error-handling',
         'recipes/human-in-the-loop',
         'recipes/custom-adapter',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Examples',
+      items: [
+        'examples/lambda-order-state-machine',
+        'examples/payment-with-retry',
       ],
     },
     {
@@ -29,13 +39,6 @@ const sidebars: SidebarsConfig = {
         'api-reference/services',
         'api-reference/interfaces',
         'api-reference/adapters',
-      ],
-    },
-    {
-      type: 'category',
-      label: 'Examples',
-      items: [
-        'examples/lambda-order-state-machine',
       ],
     },
   ],

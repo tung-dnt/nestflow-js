@@ -9,11 +9,10 @@ import { type JSX, useCallback, useState } from 'react';
 import styles from './index.module.css';
 
 function HomepageHeader() {
-  const { siteConfig } = useDocusaurusContext();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText('npm install nestflow-js');
+    navigator.clipboard.writeText('bun add nestflow-js');
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, []);
@@ -22,12 +21,12 @@ function HomepageHeader() {
     <header className={styles.heroBanner}>
       <div className="container">
         <Heading as="h1" className={styles.heroTitle}>
-          {siteConfig.title.replace('Workflow', '')}
-          <span className={styles.heroTitleAccent}>Workflow</span>
+          Event-driven NestJS{' '}
+          <span className={styles.heroTitleAccent}>State Machine</span>
         </Heading>
         <p className={styles.heroSubtitle}>
-          A powerful, tree-shakable workflow and state machine library for NestJS
-          applications, optimized for serverless environments like AWS Lambda.
+          Define workflows with <code>@Workflow</code>, handle events with <code>@OnEvent</code>,
+          and let the orchestrator drive state transitions. Zero runtime dependencies beyond NestJS.
         </p>
         <div
           className={styles.installCommand}
@@ -39,7 +38,7 @@ function HomepageHeader() {
         >
           <span className={styles.installPrompt}>$</span>
           <span className={styles.installText}>
-            npm install <span className={styles.installPkg}>nestflow-js</span>
+            bun add <span className={styles.installPkg}>nestflow-js</span>
           </span>
           <svg
             className={styles.copyIcon}
@@ -59,7 +58,7 @@ function HomepageHeader() {
           </svg>
         </div>
         <div className={styles.buttons}>
-          <Link className={styles.primaryBtn} to="/docs/quick-start">
+          <Link className={styles.primaryBtn} to="/docs/introduction">
             Get Started
           </Link>
           <Link
@@ -102,7 +101,7 @@ export default function Home(): JSX.Element {
   return (
     <Layout
       title={siteConfig.title}
-      description="A powerful, tree-shakable workflow and state machine library for NestJS applications, optimized for serverless environments like AWS Lambda."
+      description="Decorator-driven state machines for NestJS. Define workflows with @Workflow, handle events with @OnEvent. Zero runtime dependencies beyond NestJS."
     >
       <HomepageHeader />
       <main>

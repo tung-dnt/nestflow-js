@@ -142,7 +142,9 @@ export class MyService {
 
 ## Next Steps
 
+- [Introduction](./introduction) — what NestflowJS is and when to use it
 - [Workflow Concepts](./concepts/workflow) — states, transitions, and events in depth
 - [TransitResult](./concepts/transit-result) — understand what `transit()` returns
+- [Retry & Error Handling](./recipes/retry-and-error-handling) — @WithRetry, UnretriableException, payload validation
 - [Adapters](./concepts/adapters) — deploy to AWS Lambda with durable execution
 - [Examples](./examples/lambda-order-state-machine) — complete working example

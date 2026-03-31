@@ -54,6 +54,24 @@ export class OrderService {
 }
 ```
 
+#### `getRetryConfig(event)`
+
+Returns the retry configuration for a given event handler, if one was set via `@WithRetry`.
+
+##### Signature
+
+```typescript
+getRetryConfig(event: string): IBackoffRetryConfig | undefined
+```
+
+##### Parameters
+
+- `event`: The event name to look up retry config for
+
+##### Returns
+
+The `IBackoffRetryConfig` if the handler has `@WithRetry`, otherwise `undefined`.
+
 ##### Behavior
 
 1. Loads the entity using the URN
@@ -77,7 +95,7 @@ The service initializes routes on module initialization (`onModuleInit`):
 
 1. Discovers all workflow classes
 2. Extracts workflow definitions and handlers
-3. Resolves entity services and broker publishers
+3. Resolves entity services
 4. Builds route map for event handling
 
 ## StateRouterHelperFactory
@@ -115,14 +133,6 @@ Service responsible for routing workflow events to appropriate handlers.
 
 This service is used internally by `OrchestratorService` and typically doesn't need to be used directly.
 
-## SagaService
-
-Service for managing distributed transactions using the Saga pattern.
-
-### Note
-
-Saga support is planned for future releases. See the workflow definition interface for saga configuration options.
-
 ## Usage Example
 
 ```typescript
@@ -150,7 +160,6 @@ export class WorkflowProcessor {
     WorkflowModule.register({
       entities: [],
       workflows: [],
-      brokers: [],
     }),
   ],
   providers: [WorkflowProcessor],

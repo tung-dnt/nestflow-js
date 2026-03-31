@@ -21,7 +21,7 @@ WorkflowModule.register({
   imports?: any[];                    // Optional NestJS modules to import
   entities: Provider<IWorkflowEntity>[]; // Entity service providers
   workflows: Provider[];               // Workflow class providers
-  brokers: Provider<IBrokerPublisher>[]; // Broker publisher providers
+  payloadValidator?: PayloadValidator;  // Optional schema validation function
   providers?: Provider[];              // Additional providers
 })
 ```
@@ -41,9 +41,6 @@ Returns a `DynamicModule` that can be imported into your NestJS module.
         { provide: 'entity.order', useClass: OrderEntityService },
       ],
       workflows: [OrderWorkflow],
-      brokers: [
-        { provide: 'broker.order', useClass: SqsEmitter },
-      ],
     }),
   ],
 })
@@ -57,7 +54,6 @@ graph TB
     A[WorkflowModule] --> B[OrchestratorService]
     A --> C[StateRouterHelperFactory]
     A --> D[Entity Services]
-    A --> E[Broker Publishers]
     A --> F[Workflow Classes]
     B --> G[Event Processing]
     B --> H[State Transitions]
@@ -71,12 +67,11 @@ The module exports the following services:
 - `OrchestratorService` - Main workflow orchestration service
 - `StateRouterHelperFactory` - Factory for creating router helpers
 - All registered entity services
-- All registered broker publishers
 - All registered workflow classes
 
 ## Related
 
 - [OrchestratorService](./services#orchestratorservice)
 - [IWorkflowEntity](./interfaces#iworkflowentity)
-- [IBrokerPublisher](./interfaces#ibrokerpublisher)
+- [PayloadValidator](./interfaces#payloadvalidator)
 

@@ -15,11 +15,11 @@ This example demonstrates a complete order processing workflow deployed to AWS L
 
 ```mermaid
 graph TB
-    A[SQS Queue FIFO] -->|Events| B[Lambda Worker]
+    E[HTTP API / Event Source] -->|Trigger| B[Lambda + Durable Execution]
     B -->|Read/Write| C[DynamoDB Table]
-    B -->|Failed Messages| D[DLQ FIFO]
-    E[HTTP API] -->|Publish Events| A
-    B -->|Publish Events| A
+    B -->|Checkpoint/Replay| F[Durable Execution State]
+    B -->|waitForCallback| G[External Callback API]
+    G -->|Resume| B
 ```
 
 ## Features
@@ -37,8 +37,6 @@ graph TB
 ```
 lambda-order-state-machine/
 ├── src/
-│   ├── broker/
-│   │   └── mock-broker.service.ts    # SQS mock publisher
 │   ├── dynamodb/
 │   │   ├── client.ts                 # DynamoDB client
 │   │   └── order.table.ts            # Order table definition
@@ -203,7 +201,6 @@ Outputs:
     },
   ],
   entityService: ORDER_WORKFLOW_ENTITY,
-  brokerPublisher: ORDER_WORKFLOW_BROKER,
 })
 export class OrderWorkflow {
   @OnEvent(OrderEvent.CREATED)
@@ -230,14 +227,14 @@ export class OrderWorkflow {
 
 ```typescript
 import { NestFactory } from '@nestjs/core';
-import { LambdaEventHandler } from 'nestflow-js/adapter';
-import { type SQSHandler } from 'aws-lambda';
+import { DurableLambdaEventHandler } from 'nestflow-js/adapter';
+import { withDurableExecution } from '@aws/durable-execution-sdk-js';
 import { OrderModule } from './order/order.module';
 
 const app = await NestFactory.createApplicationContext(OrderModule);
 await app.init();
 
-export const handler: SQSHandler = LambdaEventHandler(app);
+export const handler = DurableLambdaEventHandler(app, withDurableExecution);
 ```
 
 ### Entity Service

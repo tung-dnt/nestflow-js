@@ -22,8 +22,6 @@ Marks a class as a workflow definition.
     - `failed`: Failed state
   - `transitions`: Array of transition definitions
   - `entityService`: Injection token for entity service
-  - `brokerPublisher`: Injection token for broker publisher
-  - `saga?`: Optional saga configuration
 
 ### Example
 
@@ -43,7 +41,6 @@ Marks a class as a workflow definition.
     },
   ],
   entityService: 'entity.order',
-  brokerPublisher: 'broker.order',
 })
 export class OrderWorkflow {}
 ```
@@ -143,6 +140,10 @@ async onSubmit(
 
 Adds retry logic to event handlers.
 
+```typescript
+import { WithRetry, RetryStrategy } from 'nestflow-js/core';
+```
+
 ### Signature
 
 ```typescript
@@ -152,19 +153,22 @@ Adds retry logic to event handlers.
 ### Parameters
 
 - `config`: Retry configuration object:
+  - `handler`: Name of the handler method (required)
   - `maxAttempts`: Maximum number of retry attempts
-  - `backoff`: Backoff strategy ('exponential' | 'linear' | 'fixed')
-  - `initialDelay`: Initial delay in milliseconds
-  - `maxDelay`: Maximum delay in milliseconds
-  - `handler?`: Optional custom retry handler injection token
+  - `strategy?`: Backoff strategy (`RetryStrategy.FIXED` | `RetryStrategy.EXPONENTIAL` | `RetryStrategy.EXPONENTIAL_JITTER`). Defaults to `RetryStrategy.EXPONENTIAL_JITTER`
+  - `initialDelay?`: Base delay in milliseconds (default 1000)
+  - `backoffMultiplier?`: Multiplier per attempt (default 2)
+  - `maxDelay?`: Upper bound in milliseconds (default 60000)
+  - `jitter?`: `true` for full jitter, `0`-`1` for partial jitter
 
 ### Example
 
 ```typescript
 @OnEvent('order.payment')
 @WithRetry({
+  handler: 'processPayment',
   maxAttempts: 3,
-  backoff: 'exponential',
+  strategy: RetryStrategy.EXPONENTIAL,
   initialDelay: 1000,
   maxDelay: 30000,
 })
@@ -192,11 +196,10 @@ async processPayment(@Entity() entity: Order) {
     },
   ],
   entityService: 'entity.order',
-  brokerPublisher: 'broker.order',
 })
 export class OrderWorkflow {
   @OnEvent('order.submit')
-  @WithRetry({ maxAttempts: 3, backoff: 'exponential' })
+  @WithRetry({ handler: 'onSubmit', maxAttempts: 3, strategy: RetryStrategy.EXPONENTIAL })
   async onSubmit(
     @Entity() entity: Order,
     @Payload(SubmitOrderDto) data: SubmitOrderDto

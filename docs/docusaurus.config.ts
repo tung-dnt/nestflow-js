@@ -5,7 +5,7 @@ import TsconfigPathsPlugin from 'tsconfig-paths-webpack-plugin';
 
 const config: Config = {
   title: 'NestflowJS',
-  tagline: 'Workflow and State Machines for NestJS',
+  tagline: 'Decorator-driven state machines for NestJS',
   favicon: 'img/logo.jpeg',
 
   // Set the production url of your site here
@@ -72,6 +72,12 @@ const config: Config = {
           label: 'Documentation',
         },
         {
+          type: 'doc',
+          docId: 'api-reference/workflow-module',
+          position: 'left',
+          label: 'API Reference',
+        },
+        {
           href: 'https://github.com/tung-dnt/nestflow-js',
           label: 'GitHub',
           position: 'right',
@@ -89,6 +95,10 @@ const config: Config = {
         {
           title: 'Documentation',
           items: [
+            {
+              label: 'Introduction',
+              to: '/docs/introduction',
+            },
             {
               label: 'Quick Start',
               to: '/docs/quick-start',
