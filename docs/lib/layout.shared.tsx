@@ -19,16 +19,16 @@ export function baseOptions(): BaseLayoutProps {
         text: 'API Reference',
         url: '/docs/api-reference/workflow-module',
       },
-      {
-        text: 'GitHub',
-        url: 'https://github.com/tung-dnt/nestflow-js',
-        external: true,
-      },
-      {
-        text: 'NPM',
-        url: 'https://www.npmjs.com/package/nestflow-js',
-        external: true,
-      },
+      // {
+      //   text: 'GitHub',
+      //   url: 'https://github.com/tung-dnt/nestflow-js',
+      //   external: true,
+      // },
+      // {
+      //   text: 'NPM',
+      //   url: 'https://www.npmjs.com/package/nestflow-js',
+      //   external: true,
+      // },
     ],
   };
 }
