@@ -1,0 +1,14 @@
+packages:
+  - docs
+  - examples/lambda-order-state-machine
+
+allowBuilds:
+  esbuild: true
+  sharp: false
+
+minimumReleaseAgeExclude:
+  - '@nestjs/common@12.6.2'
+  - '@nestjs/core@12.6.2'
+  - '@nestjs/platform-express@12.6.2'
+  - '@nestjs/testing@12.6.2'
+  - '@types/node@22.20.7'

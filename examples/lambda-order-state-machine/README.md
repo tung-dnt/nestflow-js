@@ -21,16 +21,17 @@ Complete AWS Lambda example demonstrating the `nestflow-js` library with Durable
 
 ## Installation
 
-Use Node.js 22.12 or later and NestJS 12. The build emits `dist/lambda.mjs`, so Lambda can load the handler without experimental module flags.
+Use Node.js 26 at the version pinned in [`.node-version`](../../.node-version) and pnpm 12.23.0. For deployment, install AWS CLI v2 and use an AWS account and region that support Durable Lambda on Node.js 26.
 
-Run these commands from the repository root. The example uses `file:../..` to install the library from this checkout, not the published package. Build the library before installing the example dependencies.
+Install dependencies and build the library from the repository root. The example uses `workspace:*` to link to the library in this checkout.
 
 ```bash
-bun install
-bun run build
+pnpm install --frozen-lockfile
+pnpm build
 cd examples/lambda-order-state-machine
-bun install
 ```
+
+Run the remaining commands from `examples/lambda-order-state-machine`.
 
 ## Configuration
 
@@ -45,28 +46,25 @@ DYNAMODB_TABLE=order-state-machine-orders-dev
 
 ### AWS Credentials
 
-Ensure AWS credentials are configured:
+Configure AWS credentials with deployment permissions. Use the same region for CDK and AWS CLI commands:
 
 ```bash
 aws configure
+export AWS_REGION=us-east-1
 ```
 
-Or set environment variables:
+Before deploying to an account and region for the first time, bootstrap CDK:
 
 ```bash
-export AWS_ACCESS_KEY_ID=your_access_key
-export AWS_SECRET_ACCESS_KEY=your_secret_key
-export AWS_REGION=us-east-1
+pnpm exec cdk bootstrap "aws://$(aws sts get-caller-identity --query Account --output text)/$AWS_REGION"
 ```
 
 ## Running Locally
 
-### Start the Application
+Start the NestJS application on port 3000:
 
 ```bash
-bun run start
-# or
-bun run start:dev  # with hot reload
+pnpm start
 ```
 
 To exercise order storage with DynamoDB Local, set `DYNAMODB_ENDPOINT` to the local endpoint, set `AWS_REGION`, and use dummy `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` values. Create a table with the name in `DYNAMODB_TABLE` and a string partition key named `id`. Leave `DYNAMODB_ENDPOINT` unset to use the normal AWS endpoint.
@@ -75,28 +73,27 @@ To exercise order storage with DynamoDB Local, set `DYNAMODB_ENDPOINT` to the lo
 
 ### Build the Lambda bundle
 
+The build compiles TypeScript, then uses esbuild to bundle the handler as `dist/lambda.mjs`.
+
 ```bash
-bun run typecheck
-bun run build
+pnpm build
 ```
 
 ### Preview Changes
 
 ```bash
-bun run diff
+pnpm synth
+pnpm diff
 ```
 
 ### Deploy to AWS
 
 ```bash
 # Deploy to dev stage
-bun run deploy:dev
+pnpm deploy:dev
 
 # Deploy to prod stage
-bun run deploy:prod
-
-# Or specify stage via CDK context
-bunx cdk deploy -c stage=prod -c region=us-west-2
+pnpm deploy:prod
 ```
 
 ### Deployment Output
@@ -129,7 +126,7 @@ Monitor in AWS Console:
 
 ### Invoke Lambda via AWS CLI
 
-Use the function alias ARN and a [pending order from the quick start](./QUICK_START.md#5-seed-and-process-an-order). Durable functions must be invoked through a version or alias ARN.
+Use the function alias ARN and a [pending order from the quick start](./QUICK_START.md#5-seed-and-process-an-order). Replace `YOUR_ACCOUNT` and `us-east-1` with the account and region from the deployment output. Durable functions must be invoked through a version or alias ARN.
 
 ```bash
 aws lambda invoke \
@@ -197,7 +194,7 @@ lambda-order-state-machine/
 ### AWS Resources Created
 
 1. **Lambda Function (Durable)**
-   - Runtime: Node.js 22.x
+   - Runtime: Node.js 26.x
    - Memory: 512 MB
    - Timeout: 15 minutes
    - Durable execution timeout: 1 hour
@@ -239,7 +236,7 @@ The `withDurableExecution` wrapper checkpoints completed steps. Replay can resum
 import { withDurableExecution } from "@aws/durable-execution-sdk-js";
 import { NestFactory } from "@nestjs/core";
 import { DurableLambdaEventHandler } from "nestflow-js/adapter";
-import { OrderModule } from "./order/order.module";
+import { OrderModule } from "./order/order.module.js";
 
 const app = await NestFactory.createApplicationContext(OrderModule);
 await app.init();
@@ -264,7 +261,7 @@ WorkflowModule.register({
 **Solution**: Check AWS credentials with `aws sts get-caller-identity`
 
 **Issue**: `CDKToolkit stack not found`
-**Solution**: Bootstrap CDK with `bunx cdk bootstrap`
+**Solution**: Follow the [CDK bootstrap step](./QUICK_START.md#3-bootstrap-cdk).
 
 ### Runtime Issues
 
@@ -280,10 +277,10 @@ WorkflowModule.register({
 
 ## Cleanup
 
-Remove all AWS resources:
+Remove the dev stack. This deletes the table, including its orders and receipts.
 
 ```bash
-bun run destroy
+pnpm destroy
 ```
 
 This will delete:

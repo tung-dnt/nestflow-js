@@ -7,7 +7,7 @@ export function Hero() {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText('bun add nestflow-js');
+    navigator.clipboard.writeText('pnpm add nestflow-js');
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, []);
@@ -38,7 +38,7 @@ export function Hero() {
         >
           <span className="text-white/50 select-none">$</span>
           <span>
-            bun add <span className="text-[#ff6b6b]">nestflow-js</span>
+            pnpm add <span className="text-[#ff6b6b]">nestflow-js</span>
           </span>
           <svg
             className="h-4 w-4 opacity-60 transition-opacity hover:opacity-100"

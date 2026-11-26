@@ -1,3 +1,3 @@
 {
-  "app": "bun run infra/order-stack.ts"
+  "app": "node .build/infra/order-stack.js"
 }

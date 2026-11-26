@@ -6,8 +6,8 @@ import type { IWorkflowEntity, TransitionClaim, TransitionReceipt } from 'nestfl
 import { createHash, randomUUID } from 'node:crypto';
 import { uuidv7 } from 'uuidv7';
 
-import { DocumentClient } from '../dynamodb/client';
-import { type Order, OrderEntity, OrderState, OrderTable } from '../dynamodb/order.table';
+import { DocumentClient } from '../dynamodb/client.js';
+import { type Order, OrderEntity, OrderState, OrderTable } from '../dynamodb/order.table.js';
 
 const tableName = OrderTable.getName();
 const orderParser = OrderEntity.build(EntityParser);

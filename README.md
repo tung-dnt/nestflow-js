@@ -20,19 +20,16 @@ Define business state and transitions. Keep your entities in a storage backend t
 This version requires NestJS 12 and Node.js 22.12 or later. See the [NestJS 12 migration guide](https://docs.nestjs.com/migration-guide).
 
 ```bash
-# Using bun
-bun add nestflow-js @nestjs/common@12 @nestjs/core@12 reflect-metadata rxjs
-
-# Using npm
-npm install nestflow-js @nestjs/common@12 @nestjs/core@12 reflect-metadata rxjs
-
-# Using yarn
-yarn add nestflow-js @nestjs/common@12 @nestjs/core@12 reflect-metadata rxjs
+pnpm add nestflow-js @nestjs/common@12 @nestjs/core@12 class-transformer@^0.5.1 class-validator@^0.14.2 reflect-metadata@^0.2.0 rxjs@^7.8.0
 ```
+
+The TypeScript examples use ESM (`"type": "module"` in `package.json` and `"module": "NodeNext"` in `tsconfig.json`). Enable `experimentalDecorators` and `emitDecoratorMetadata` in `tsconfig.json`.
 
 ## Quick Start
 
 ### 1. Define Your Entity
+
+Create `order.ts`:
 
 ```typescript
 export enum OrderStatus {
@@ -50,8 +47,11 @@ export interface Order {
 
 ### 2. Create a Workflow
 
+Create `order.workflow.ts`:
+
 ```typescript
 import { Workflow, OnEvent, Entity } from 'nestflow-js/core';
+import { OrderStatus, type Order } from './order.js';
 
 @Workflow({
   name: 'OrderWorkflow',
@@ -93,11 +93,13 @@ Implement [`IWorkflowEntity`](https://tung-dnt.github.io/nestflow-js/docs/api-re
 
 ### 4. Register the Module
 
+Create `order.module.ts`:
+
 ```typescript
 import { Module } from '@nestjs/common';
 import { WorkflowModule } from 'nestflow-js/core';
-import { OrderWorkflow } from './order.workflow';
-import { OrderEntityService } from './order-entity.service';
+import { OrderWorkflow } from './order.workflow.js';
+import { OrderEntityService } from './order-entity.service.js';
 
 @Module({
   imports: [
@@ -147,7 +149,7 @@ nestflow-js/
 
 ```typescript
 // Core workflow engine
-import { WorkflowModule, IWorkflowEvent } from 'nestflow-js/core';
+import { WorkflowModule, type IWorkflowEvent } from 'nestflow-js/core';
 
 // Adapter — base class + built-in durable Lambda adapter
 import { BaseWorkflowAdapter, DurableLambdaEventHandler } from 'nestflow-js/adapter';
@@ -237,23 +239,23 @@ The built-in `DurableLambdaEventHandler` runs the workflow across Lambda invocat
 
 Send `{ urn, initialEvent, eventId, payload? }` to start an execution. The adapter does not use SDK automatic retries for transit steps. It schedules another attempt only when the orchestrator returns `{ status: 'retry' }`.
 
+Install the AWS Durable Execution SDK before building the handler:
+
+```bash
+pnpm add @aws/durable-execution-sdk-js
+```
+
 ```typescript
 import { withDurableExecution } from '@aws/durable-execution-sdk-js';
 import { NestFactory } from '@nestjs/core';
 import { DurableLambdaEventHandler } from 'nestflow-js/adapter';
-import { OrderModule } from './order/order.module';
+import { OrderModule } from './order.module.js';
 
 const app = await NestFactory.createApplicationContext(OrderModule);
 await app.init();
 
 export const handler = DurableLambdaEventHandler(app, withDurableExecution);
 ```
-
-## Requirements
-
-- Node.js >= 20.0.0 or Bun >= 1.3.4
-- NestJS >= 11.0.0
-- TypeScript >= 5.0.0
 
 ## Contributing
 

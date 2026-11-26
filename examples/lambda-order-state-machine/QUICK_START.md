@@ -2,36 +2,48 @@
 
 Deploy the order workflow and process a pending order with Durable Lambda.
 
-## Fast Setup
+## Prerequisites
 
-### 1. Build the library and install example dependencies
+- Node.js 26 at the version pinned in [`.node-version`](../../.node-version).
+- pnpm 12.23.0.
+- AWS CLI v2 and credentials with permission to bootstrap and deploy with AWS CDK.
+- An AWS region that supports Durable Lambda on Node.js 26.
 
-Run these commands from the repository root. The example uses the library built from this checkout.
+## Deploy and invoke
+
+### 1. Install dependencies and build the library
+
+Run these commands from the repository root. The example links to the library in this checkout through the workspace.
 
 ```bash
-bun install
-bun run build
+pnpm install --frozen-lockfile
+pnpm build
 cd examples/lambda-order-state-machine
-bun install
 ```
 
-### 2. Configure AWS (if not already done)
+Run the remaining commands from `examples/lambda-order-state-machine`.
+
+### 2. Configure AWS
+
+Configure credentials if you have not done so. Set the region for CDK and the AWS CLI:
 
 ```bash
 aws configure
-# Enter your AWS credentials
+export AWS_REGION=us-east-1
 ```
 
-### 3. Bootstrap CDK (first time only)
+### 3. Bootstrap CDK
+
+Run this once per AWS account and region:
 
 ```bash
-bunx cdk bootstrap
+pnpm exec cdk bootstrap "aws://$(aws sts get-caller-identity --query Account --output text)/$AWS_REGION"
 ```
 
-### 4. Deploy to AWS (2-3 minutes)
+### 4. Deploy the dev stack
 
 ```bash
-bun run deploy:dev
+pnpm deploy:dev
 ```
 
 ### 5. Seed and process an order
@@ -45,7 +57,7 @@ aws dynamodb put-item \
   --item '{"id":{"S":"0195146b-1ab7-7dcd-9d26-60eb422f767d"},"item":{"S":"laptop"},"quantity":{"N":"1"},"price":{"N":"999"},"status":{"S":"pending"}}'
 ```
 
-Invoke the Lambda with the order ID and a stable `eventId`. Reuse that event ID when you retry the same request.
+Invoke the Lambda with the order ID and a stable `eventId`. Replace `YOUR_ACCOUNT` and `us-east-1` using the `FunctionAliasArn` from the deployment output. Reuse the event ID when you retry the same request.
 
 ```bash
 aws lambda invoke \
@@ -86,29 +98,27 @@ PENDING → PROCESSING → SHIPPED
 
 ## Local Development
 
-Run locally without deploying:
+Start the local NestJS application on port 3000:
 
 ```bash
-bun run start:dev
+pnpm start
 ```
 
 ## Common Commands
 
 ```bash
 # Development
-bun install               # Install dependencies
-bun run build             # Compile TypeScript
-bun run start             # Run locally
-bun run start:dev         # Run with hot reload
+pnpm build                # Compile TypeScript and bundle the Lambda handler
+pnpm start                # Start the local NestJS application
 
 # Deployment
-bun run deploy:dev        # Deploy to dev
-bun run deploy:prod       # Deploy to prod
-bun run diff              # Preview changes
-bun run synth             # Synthesize CloudFormation
+pnpm deploy:dev           # Deploy to dev
+pnpm deploy:prod          # Deploy to prod
+pnpm diff                 # Preview changes
+pnpm synth                # Synthesize CloudFormation
 
 # Cleanup
-bun run destroy           # Remove deployment
+pnpm destroy              # Remove the dev stack and its stored data
 ```
 
 ## Monitoring
@@ -132,7 +142,7 @@ aws logs tail /aws/lambda/order-state-machine-dev-order-workflow --follow
 **Fix**: Check AWS credentials with `aws sts get-caller-identity`
 
 **Issue**: CDK bootstrap required
-**Fix**: Run `bunx cdk bootstrap` once per account/region
+**Fix**: Follow the [CDK bootstrap step](#3-bootstrap-cdk) once per account and region.
 
 **Issue**: Workflow not processing
 **Fix**: Check Lambda logs with `aws logs tail`

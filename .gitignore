@@ -1,9 +1,10 @@
 # Dependencies
 node_modules/
-bun.lock
 
 # Build output
 dist/
+.build/
+cdk.out/
 *.tsbuildinfo
 
 # Environment

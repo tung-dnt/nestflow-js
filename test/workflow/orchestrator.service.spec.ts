@@ -15,7 +15,7 @@ import {
 import { UnretriableException } from '@/exception';
 import { BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterEach, describe, expect, test, vi } from 'vite-plus/test';
 import { setImmediate } from 'node:timers/promises';
 import { InMemoryWorkflowEntity } from '../e2e/fixtures/in-memory-workflow-entity';
 import { MockDurableContext, mockWithDurableExecution } from '../e2e/fixtures/mock-durable-context';
@@ -283,7 +283,7 @@ describe('Workflow transition regressions', () => {
     test('does not expose event payload values in logs', async () => {
       const { app, event, orchestrator } = await createWorkflow();
       await app.init();
-      const log = spyOn(Logger.prototype, 'log');
+      const log = vi.spyOn(Logger.prototype, 'log');
       const payloadMarker = 'private-order-details-test-marker';
 
       try {
@@ -323,7 +323,7 @@ describe('Workflow transition regressions', () => {
         },
       });
       const claimTransition = store.claimTransition.bind(store);
-      spyOn(store, 'claimTransition').mockImplementation(async (urn, eventId) => {
+      vi.spyOn(store, 'claimTransition').mockImplementation(async (urn, eventId) => {
         const claim = await claimTransition(urn, eventId);
         if (claim.kind !== 'acquired') return claim;
         return {

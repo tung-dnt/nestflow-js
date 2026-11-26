@@ -1,6 +1,6 @@
 import { WorkflowModule } from '@/core/workflow.module';
 import { Test, TestingModule } from '@nestjs/testing';
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'vite-plus/test';
 
 describe('WorkflowModule', () => {
   let module: TestingModule;

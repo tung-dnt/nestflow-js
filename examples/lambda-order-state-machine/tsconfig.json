@@ -35,4 +35,6 @@
       "@/*": ["./src/*"],
     },
   },
+  "include": ["src/**/*.ts", "infra/**/*.ts"],
+  "exclude": ["node_modules", "dist", ".build"]
 }

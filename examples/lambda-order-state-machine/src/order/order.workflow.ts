@@ -1,9 +1,8 @@
 import { Logger } from '@nestjs/common';
 import { Entity, OnDefault, OnEvent, Payload, Workflow } from 'nestflow-js/core';
 
-import type { Order } from '../dynamodb/order.table';
-import { OrderState } from '../dynamodb/order.table';
-import { ORDER_WORKFLOW_ENTITY, OrderEvent } from './order.constant';
+import { OrderState, type Order } from '../dynamodb/order.table.js';
+import { ORDER_WORKFLOW_ENTITY, OrderEvent } from './order.constant.js';
 
 @Workflow<Order, OrderEvent, OrderState>({
   name: 'OrderWorkflow',

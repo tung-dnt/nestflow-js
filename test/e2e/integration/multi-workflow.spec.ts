@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'vite-plus/test';
 import { WorkflowModule } from '@/core/workflow.module';
 import { OrchestratorService } from '@/core/providers/orchestrator.service';
 import { MockRetryHandler } from '../fixtures/mock-retry-handler.service';

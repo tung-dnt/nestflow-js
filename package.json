@@ -2,6 +2,7 @@
   "name": "nestflow-js",
   "version": "0.1.15",
   "private": false,
+  "packageManager": "pnpm@12.23.0",
   "description": "Workflow and state machine for NestJS",
   "license": "MIT",
   "author": "Thomas Do (tung-dnt)",
@@ -14,11 +15,6 @@
       "types": "./dist/core/index.d.ts",
       "import": "./dist/core/index.js",
       "default": "./dist/core/index.js"
-    },
-    "./event-bus": {
-      "types": "./dist/event-bus/index.d.ts",
-      "import": "./dist/event-bus/index.js",
-      "default": "./dist/event-bus/index.js"
     },
     "./exception": {
       "types": "./dist/exception/index.d.ts",
@@ -38,22 +34,16 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "NODE_ENV=production bun run scripts/build.ts",
-    "format": "prettier --write \"packages/**/*.ts\" \"scripts/**/*.ts\" \"test/**/*.ts\"",
-    "format:check": "prettier --check \"packages/**/*.ts\" \"scripts/**/*.ts\" \"test/**/*.ts\"",
-    "lint": "eslint \"packages/**/*.ts\" \"scripts/**/*.ts\" \"test/**/*.ts\"",
-    "lint:fix": "eslint --fix \"packages/**/*.ts\" \"scripts/**/*.ts\" \"test/**/*.ts\"",
-    "check": "bun run lint && bun run format:check",
-    "test": "bun test",
-    "test:watch": "bun test --watch",
-    "test:cov": "bun test --coverage",
-    "test:debug": "bun --inspect-brk --runInBand",
-    "test:e2e": "bun test ./tests/app.e2e-spec.ts",
-    "test:all": "bun run scripts/test.ts",
-    "deps": "bun run scripts/install.ts",
-    "typecheck": "tsgo --noEmit",
-    "typecheck:all": "bun run scripts/typecheck.ts",
-    "prepublishOnly": "bun run build"
+    "build": "node scripts/build.mjs && tsc -p tsconfig.build.json && tsc-alias -p tsconfig.build.json --resolve-full-paths",
+    "check": "vp check packages scripts test vite.config.ts && pnpm run typecheck",
+    "test": "vp test",
+    "test:watch": "vp test watch",
+    "test:cov": "vp test run --coverage",
+    "test:e2e": "vp test test/e2e",
+    "typecheck": "tsc --noEmit",
+    "verify:package": "node scripts/verify-package.mjs",
+    "verify:lambda": "pnpm --filter lambda-order-state-machine run verify:lambda",
+    "prepublishOnly": "pnpm run build"
   },
   "peerDependencies": {
     "@nestjs/common": "^12.0.0",
@@ -64,36 +54,23 @@
     "rxjs": "^7.8.0"
   },
   "devDependencies": {
-    "@aws/durable-execution-sdk-js": "^1.1.0",
-    "@aws/durable-execution-sdk-js-testing": "^1.1.1",
+    "@aws/durable-execution-sdk-js": "1.1.0",
+    "@aws/durable-execution-sdk-js-testing": "1.1.1",
     "@nestjs/common": "^12.6.2",
     "@nestjs/core": "^12.6.2",
     "@nestjs/platform-express": "^12.6.2",
     "@nestjs/testing": "^12.6.2",
-    "@types/bun": "^1.3.4",
-    "@typescript-eslint/eslint-plugin": "^8.57.1",
-    "@typescript-eslint/parser": "^8.57.1",
-    "@typescript/native-preview": "^7.0.0-dev.20251213.1",
-    "del-cli": "^6.0.0",
-    "eslint": "^10.1.0",
-    "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-import": "^2.32.0",
-    "eslint-plugin-prettier": "^5.5.5",
-    "prettier": "^3.8.1",
+    "@types/node": "22.20.7",
+    "@vitest/coverage-v8": "5.1.1",
     "reflect-metadata": "^0.2.2",
-    "source-map-support": "^0.5.21",
-    "supertest": "^7.1.1",
     "tsc-alias": "^1.8.16",
-    "typescript": "^5.8.3",
-    "typescript-eslint": "^8.57.1"
+    "typescript": "5.9.3",
+    "vite-plus": "1.8.0"
   },
   "typesVersions": {
     "*": {
       "core": [
         "./dist/core/index.d.ts"
-      ],
-      "event-bus": [
-        "./dist/event-bus/index.d.ts"
       ],
       "exception": [
         "./dist/exception/index.d.ts"
@@ -103,11 +80,7 @@
       ]
     }
   },
-  "_moduleAliases": {
-    "@/*": "*"
-  },
   "engines": {
-    "bun": ">=1.3.4",
     "node": ">=22.12.0"
   },
   "keywords": [

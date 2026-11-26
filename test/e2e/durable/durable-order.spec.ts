@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll, afterAll, beforeEach, spyOn } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vite-plus/test';
 import { Test } from '@nestjs/testing';
 import { withDurableExecution, type DurableLambdaHandler } from '@aws/durable-execution-sdk-js';
 import { LocalDurableTestRunner, WaitingOperationStatus } from '@aws/durable-execution-sdk-js-testing';
@@ -233,7 +233,7 @@ describe('Durable Lambda Adapter — Order Workflow E2E', () => {
       const order = await entityService.create();
       const eventId = `${order.id}:ship`;
       const claimTransition = entityService.claimTransition.bind(entityService);
-      const claimSpy = spyOn(entityService, 'claimTransition').mockImplementation(async (urn, id) => {
+      const claimSpy = vi.spyOn(entityService, 'claimTransition').mockImplementation(async (urn, id) => {
         const claim = await claimTransition(urn, id);
         if (claim.kind !== 'acquired') return claim;
         return {
