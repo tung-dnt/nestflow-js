@@ -1,5 +1,13 @@
 import type { TransitionCompletion, TransitionReceipt } from './entity.interface';
 
+export const WORKFLOW_HISTORY = Symbol('WORKFLOW_HISTORY');
+
+export interface WorkflowCancellationStore {
+  /** Persist an idempotent stop request. Return false if the entity does not exist. */
+  request(urn: string | number): Promise<boolean>;
+  isRequested(urn: string | number): Promise<boolean>;
+}
+
 export interface TransitionCommitMetadata {
   workflow: string;
   event: string;

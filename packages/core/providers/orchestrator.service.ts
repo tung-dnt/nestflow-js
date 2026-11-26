@@ -14,6 +14,7 @@ import {
   type TransitionReceipt,
 } from '@/core';
 import { UnretriableException } from '@/exception/unretriable.exception';
+import { WorkflowCancelledException } from '@/exception/workflow-cancelled.exception';
 import {
   BadRequestException,
   ConflictException,
@@ -32,7 +33,11 @@ import {
   type TransitionTrace,
   type WorkflowTelemetry,
 } from '../types/workflow-telemetry.interface';
-import type { TransitionCommitMetadata } from '../types/workflow-recovery.interface';
+import {
+  WORKFLOW_HISTORY,
+  type TransitionCommitMetadata,
+  type WorkflowHistoryReader,
+} from '../types/workflow-recovery.interface';
 import { StateRouterHelperFactory } from './router.factory';
 
 function transitionFailure(message: string, cause: unknown, storageError: unknown): AggregateError {
@@ -59,6 +64,7 @@ export class OrchestratorService implements OnModuleInit {
     private readonly routerHelperFactory: StateRouterHelperFactory,
     private readonly moduleRef: ModuleRef,
     @Optional() @Inject(WORKFLOW_TELEMETRY) private readonly telemetry?: WorkflowTelemetry,
+    @Optional() @Inject(WORKFLOW_HISTORY) private readonly history?: WorkflowHistoryReader,
   ) {}
 
   onModuleInit() {
@@ -132,6 +138,15 @@ export class OrchestratorService implements OnModuleInit {
     return this.routes.get(event)?.retryConfig;
   }
 
+  /** Request cancellation of the entity handled by the specified workflow event route. */
+  requestCancellation(event: string, urn: string | number): Promise<boolean> {
+    const route = this.routes.get(event);
+    if (!route) throw new BadRequestException(`No workflow found for event: ${event}`);
+    const cancellation = route.entityService.cancellation;
+    if (!cancellation) throw new BadRequestException('Workflow cancellation is not configured');
+    return cancellation.request(urn);
+  }
+
   /** Execute one attempt. Direct callers do not schedule handler retries. */
   transit(params: IWorkflowEvent): Promise<TransitResult> {
     return this.transitAttempt(params, false);
@@ -190,6 +205,7 @@ export class OrchestratorService implements OnModuleInit {
 
     const claim = await entityService.claimTransition(urn, eventId);
     if (claim.kind === 'missing') throw new BadRequestException('Entity not found', String(urn));
+    if (claim.kind === 'cancelled') throw new WorkflowCancelledException();
     if (claim.kind === 'busy') {
       if (context) this.sendTelemetry(() => this.telemetry?.log({ ...context, kind: 'claim_busy' }));
       throw new ConflictException(`Entity ${urn} already has a transition in progress`);
@@ -242,13 +258,12 @@ export class OrchestratorService implements OnModuleInit {
 
         const targetState = completion.kind === 'applied' ? transition.to : definition.states.failed;
         try {
-          receipt = await claim.commit(targetState, completion, {
-            workflow: definition.name,
-            event,
-            eventId,
-            urn,
-            from: state,
-          });
+          receipt = await claim.commit(
+            targetState,
+            completion,
+            { workflow: definition.name, event, eventId, urn, from: state },
+            this.history && true,
+          );
           committed = true;
         } catch (error) {
           if (context) this.sendTelemetry(() => this.telemetry?.log({ ...context, kind: 'commit_unconfirmed' }));
@@ -287,7 +302,10 @@ export class OrchestratorService implements OnModuleInit {
   }
 
   /** Resolve committed work from a trusted storage provider without running the original handler. */
-  resumeCommitted(transition: TransitionCommitMetadata, receipt: TransitionReceipt<unknown>): TransitResult {
+  async resumeCommitted(
+    transition: TransitionCommitMetadata,
+    receipt: TransitionReceipt<unknown>,
+  ): Promise<TransitResult> {
     const route = this.routes.get(transition.event);
     if (!route || route.definition.name !== transition.workflow) {
       throw new Error(`Cannot resume committed event ${transition.event} in workflow ${transition.workflow}`);
@@ -295,11 +313,14 @@ export class OrchestratorService implements OnModuleInit {
     return this.resolveReceipt(transition, route, receipt);
   }
 
-  private resolveReceipt(
+  private async resolveReceipt(
     { event, eventId, urn }: Pick<IWorkflowEvent, 'event' | 'eventId' | 'urn'>,
     { definition, entityService }: IWorkflowDefaultRoute,
     receipt: TransitionReceipt<unknown>,
-  ): TransitResult {
+  ): Promise<TransitResult> {
+    if (entityService.cancellation && (await entityService.cancellation.isRequested(urn))) {
+      throw new WorkflowCancelledException();
+    }
     const router = this.routerHelperFactory.create(event, entityService, definition);
     const { entity, completion } = receipt;
     const state = entityService.status(entity);

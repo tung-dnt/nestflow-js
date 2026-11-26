@@ -17,6 +17,7 @@ import type {
   TransitionReceipt,
   WorkflowHistoryEntry,
   WorkflowHistoryReader,
+  WorkflowCancellationStore,
   WorkflowRecoveryStore,
 } from 'nestflow-js/core';
 import { createHash, randomUUID } from 'node:crypto';
@@ -101,6 +102,38 @@ async function readTransition(
 
 @Injectable()
 export class OrderEntityService implements IWorkflowEntity<Order, OrderState>, WorkflowHistoryReader, WorkflowRecoveryStore {
+  readonly cancellation: WorkflowCancellationStore = {
+    request: async (urn) => {
+      try {
+        await DocumentClient.send(
+          new UpdateCommand({
+            TableName: tableName,
+            Key: { id: String(urn) },
+            ConditionExpression: 'attribute_exists(#status)',
+            UpdateExpression: 'SET cancellationRequested = :requested',
+            ExpressionAttributeNames: statusAttribute,
+            ExpressionAttributeValues: { ':requested': true },
+          }),
+        );
+        return true;
+      } catch (error) {
+        if (error instanceof ConditionalCheckFailedException) return false;
+        throw error;
+      }
+    },
+    isRequested: async (urn) => {
+      const { Item } = await DocumentClient.send(
+        new GetCommand({
+          TableName: tableName,
+          Key: { id: String(urn) },
+          ProjectionExpression: 'cancellationRequested',
+          ConsistentRead: true,
+        }),
+      );
+      return Item?.cancellationRequested === true;
+    },
+  };
+
   async listTransitions(urn: string | number, limit: number, cursor?: string) {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new RangeError('History limit must be 1–100');
     const group = historyGroup(urn);
@@ -218,6 +251,7 @@ export class OrderEntityService implements IWorkflowEntity<Order, OrderState>, W
     const digest = createHash('sha256').update(JSON.stringify([key.id, eventId])).digest('hex');
     const receiptKey = { id: `${receiptPrefix}${digest}` };
     const prior = await readTransition(key, receiptKey);
+    if (prior.order?.cancellationRequested === true) return { kind: 'cancelled' };
     if (prior.receipt) return { kind: 'completed', receipt: prior.receipt };
     if (!prior.order) return { kind: 'missing' };
 
@@ -230,7 +264,7 @@ export class OrderEntityService implements IWorkflowEntity<Order, OrderState>, W
           TableName: tableName,
           Key: key,
           UpdateExpression: 'SET leaseOwner = :owner, leaseExpiresAt = :expiresAt',
-          ConditionExpression: orderAvailable,
+          ConditionExpression: `${orderAvailable} AND attribute_not_exists(cancellationRequested)`,
           ExpressionAttributeNames: statusAttribute,
           ExpressionAttributeValues: { ':owner': owner, ':expiresAt': expiresAt, ':now': now },
         }),
@@ -238,6 +272,7 @@ export class OrderEntityService implements IWorkflowEntity<Order, OrderState>, W
     } catch (error) {
       if (!(error instanceof ConditionalCheckFailedException)) throw error;
       const observed = await readTransition(key, receiptKey);
+      if (observed.order?.cancellationRequested === true) return { kind: 'cancelled' };
       if (observed.receipt) return { kind: 'completed', receipt: observed.receipt };
       return observed.order ? { kind: 'busy' } : { kind: 'missing' };
     }
@@ -269,7 +304,7 @@ export class OrderEntityService implements IWorkflowEntity<Order, OrderState>, W
         return {
           kind: 'acquired',
           entity,
-          async commit(status, completion, metadata) {
+          async commit(status, completion, metadata, recordHistory) {
             const updated: Order = orderParser.parse({ ...entity, id: key.id, status }).item;
             const output = completion.kind === 'applied' ? completion.output : undefined;
             const outputJson = output === undefined ? undefined : JSON.stringify(output);
@@ -286,11 +321,21 @@ export class OrderEntityService implements IWorkflowEntity<Order, OrderState>, W
               ClientRequestToken: owner,
               TransactItems: [
                 {
-                  Put: {
+                  Update: {
                     TableName: tableName,
-                    Item: updated,
+                    Key: key,
+                    UpdateExpression:
+                      'SET #status = :status, #item = :item, quantity = :quantity, price = :price REMOVE leaseOwner, leaseExpiresAt',
                     ConditionExpression: 'leaseOwner = :owner AND leaseExpiresAt > :now',
-                    ExpressionAttributeValues: { ':owner': owner, ':now': commitTime },
+                    ExpressionAttributeNames: { ...statusAttribute, '#item': 'item' },
+                    ExpressionAttributeValues: {
+                      ':owner': owner,
+                      ':now': commitTime,
+                      ':status': updated.status,
+                      ':item': updated.item,
+                      ':quantity': updated.quantity,
+                      ':price': updated.price,
+                    },
                   },
                 },
                 {
@@ -301,9 +346,11 @@ export class OrderEntityService implements IWorkflowEntity<Order, OrderState>, W
                       entity: updated,
                       kind: completion.kind,
                       outputJson,
-                      history,
-                      recordGroup: historyGroup(key.id),
-                      recordOrder: orderKeyAt(commitTime, receiptKey.id),
+                      ...(recordHistory && {
+                        history,
+                        recordGroup: historyGroup(key.id),
+                        recordOrder: orderKeyAt(commitTime, receiptKey.id),
+                      }),
                     },
                     ConditionExpression: 'attribute_not_exists(id)',
                   },

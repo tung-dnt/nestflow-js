@@ -8,6 +8,7 @@ import {
   WithRetry,
   Workflow,
   WorkflowModule,
+  WORKFLOW_HISTORY,
   WORKFLOW_TELEMETRY,
   type IWorkflowDefinition,
   type IWorkflowEvent,
@@ -16,8 +17,9 @@ import {
   type TransitionLog,
   type TransitionTrace,
   type WorkflowTelemetry,
+  type WorkflowHistoryReader,
 } from '@/core';
-import { UnretriableException } from '@/exception';
+import { UnretriableException, WorkflowCancelledException } from '@/exception';
 import { BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { afterEach, describe, expect, test, vi } from 'vite-plus/test';
@@ -55,6 +57,7 @@ describe('Workflow transition regressions', () => {
     handle = async () => {},
     beforeCommit,
     telemetry,
+    history,
   }: {
     transitions?: Definition['transitions'];
     idles?: Definition['states']['idles'];
@@ -63,6 +66,7 @@ describe('Workflow transition regressions', () => {
     handle?: (eventId: string) => Promise<unknown>;
     beforeCommit?: (state: State) => void;
     telemetry?: WorkflowTelemetry;
+    history?: WorkflowHistoryReader;
   } = {}) {
     const event = createWorkflowEvent(eventName, orderUrn);
     class OrderStore extends InMemoryWorkflowEntity<Entity, 'state'> {
@@ -95,7 +99,10 @@ describe('Workflow transition regressions', () => {
             entities: [{ provide: 'test.orders', useValue: store }],
             workflows: [OrderWorkflow],
             payloadValidator,
-            providers: telemetry ? [{ provide: WORKFLOW_TELEMETRY, useValue: telemetry }] : [],
+            providers: [
+              ...(telemetry ? [{ provide: WORKFLOW_TELEMETRY, useValue: telemetry }] : []),
+              ...(history ? [{ provide: WORKFLOW_HISTORY, useValue: history }] : []),
+            ],
           }),
         ],
       }).compile();
@@ -115,10 +122,37 @@ describe('Workflow transition regressions', () => {
       expect((await store.load(event.urn))?.state).toBe('done');
     });
 
-    test('recovers a committed continuation after delivery fails without rerunning the handler', async () => {
+    test('blocks new claims and continuation but lets an already claimed handler commit', async () => {
+      const started = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      const { app, orchestrator, event, store } = await createWorkflow({
+        transitions: [advance('pending', 'review'), advance('review', 'done')],
+        handle: async () => {
+          started.resolve();
+          await finish.promise;
+        },
+      });
+      await app.init();
+      const attempted = expect(orchestrator.transit(event)).rejects.toBeInstanceOf(WorkflowCancelledException);
+      await started.promise;
+      try {
+        expect(await orchestrator.requestCancellation(event.event, event.urn)).toBe(true);
+        expect(await orchestrator.requestCancellation(event.event, event.urn)).toBe(true);
+        await expect(orchestrator.transit(createWorkflowEvent(event.event, event.urn))).rejects.toBeInstanceOf(
+          WorkflowCancelledException,
+        );
+      } finally {
+        finish.resolve();
+      }
+      await attempted;
+      expect((await store.load(event.urn))?.state).toBe('review');
+    });
+
+    test.each([false, true])('recovers pending delivery with cancellation requested: %s', async (cancel) => {
       let handlerCalls = 0;
       const { app, event, orchestrator, store } = await createWorkflow({
         transitions: [advance('pending', 'review'), advance('review', 'done')],
+        history: cancel ? { listTransitions: async () => ({ entries: [] }) } : undefined,
         handle: async () => {
           handlerCalls++;
           return { approved: true };
@@ -132,8 +166,9 @@ describe('Workflow transition regressions', () => {
         if (claim.kind !== 'acquired') return claim;
         return {
           ...claim,
-          commit: async (state, completion, transition) => {
-            const receipt = await claim.commit(state, completion, transition);
+          commit: async (state, completion, transition, recordHistory) => {
+            expect(recordHistory).toBe(cancel ? true : undefined);
+            const receipt = await claim.commit(state, completion, transition, recordHistory);
             pending = {
               transition,
               receipt,
@@ -155,9 +190,11 @@ describe('Workflow transition regressions', () => {
           throw brokerError;
         }),
       ).rejects.toBe(brokerError);
+      if (cancel) await orchestrator.requestCancellation(event.event, event.urn);
       const deliver = vi.fn(async () => {});
       expect(await recoverNextTransition(orchestrator, recovery, deliver)).toBe(true);
-      expect(deliver).toHaveBeenCalledExactlyOnceWith(original);
+      if (cancel) expect(deliver).not.toHaveBeenCalled();
+      else expect(deliver).toHaveBeenCalledExactlyOnceWith(original);
       expect(await recoverNextTransition(orchestrator, recovery, deliver)).toBe(false);
       expect(handlerCalls).toBe(1);
       expect((await store.load(event.urn))?.state).toBe('review');
@@ -222,7 +259,7 @@ describe('Workflow transition regressions', () => {
     test('rejects invalid payloads without running the handler or changing the state', async () => {
       let handlerCalls = 0;
       const { app, event, orchestrator, store } = await createWorkflow({
-        payloadValidator: () => {
+        payloadValidator: async () => {
           throw new Error('Missing approval');
         },
         handle: async () => {

@@ -1,4 +1,4 @@
-import type { TransitionCommitMetadata } from './workflow-recovery.interface';
+import type { TransitionCommitMetadata, WorkflowCancellationStore } from './workflow-recovery.interface';
 
 export type TransitionCompletion =
   | { kind: 'applied'; output: unknown }
@@ -13,6 +13,7 @@ export interface TransitionReceipt<T> {
 export type TransitionClaim<T, State> =
   | { kind: 'missing' }
   | { kind: 'busy' }
+  | { kind: 'cancelled' }
   | { kind: 'completed'; receipt: TransitionReceipt<T> }
   | {
       kind: 'acquired';
@@ -21,12 +22,16 @@ export type TransitionClaim<T, State> =
         state: State,
         completion: TransitionCompletion,
         metadata: TransitionCommitMetadata,
+        recordHistory?: true,
       ): Promise<TransitionReceipt<T>>;
       release(): Promise<void>;
     };
 
 /** Persistence contract for entities and atomic workflow transition receipts. */
 export interface IWorkflowEntity<T = any, State = string | number> {
+  /** When configured, new claims must atomically reject cancelled entities. */
+  cancellation?: WorkflowCancellationStore;
+
   /**
    * Creates a new instance of the entity
    * @returns A new entity instance
