@@ -62,7 +62,7 @@ export class OrderWorkflow {
 | `states.idles` | `IdleStateEntry<State>[]` | Idle states — workflow pauses for external input |
 | `states.failed` | `State` | Error fallback state |
 | `transitions` | `ITransitionEvent[]` | Allowed state transitions |
-| `conditions` | `Function[]` | Optional global guards evaluated on every transition |
+| `conditions` | `Function[]` | Optional pure guards that apply to every transition |
 | `defaultCallbackTimeout` | `Duration` | Default timeout for idle/no_transition waits |
 | `entityService` | `string` | NestJS DI token for the entity service |
 
@@ -112,11 +112,11 @@ WorkflowModule.register({
 
 ## Best Practices
 
-1. **Keep workflows stateless** — store state in your entities, not in workflow classes
-2. **Use idempotent handlers** — events may be processed multiple times in retry/replay scenarios
-3. **Validate payloads** — use `@Payload(schema)` with the `payloadValidator` option
-4. **One handler per event** — duplicate event names across workflows throw at startup
-5. **Use typed generics** — `@Workflow<Order, OrderEvent, OrderStatus>({...})` for compile-time safety
+1. Store workflow state in your entities, not in workflow classes.
+2. Keep guards pure. Use [`@EventId()`](/docs/api-reference/decorators#eventid) with the entity ID to deduplicate side effects when a handler runs again.
+3. Return serializable handler output that is safe to persist in a transition receipt.
+4. Validate payloads with `@Payload(schema)` and the `payloadValidator` option.
+5. Give each event name one handler across all workflows. Duplicate handlers fail at startup.
 
 ## Related
 

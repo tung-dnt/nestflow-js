@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { IWorkflowEntity } from '@/core';
+import { InMemoryWorkflowEntity } from '../../fixtures/in-memory-workflow-entity';
 
 export enum OrderState {
   PENDING = 'pending',
@@ -24,8 +24,10 @@ export interface Order {
  * In-memory entity service for testing
  */
 @Injectable()
-export class OrderEntityService implements IWorkflowEntity<Order, OrderState> {
-  private orders = new Map<string, Order>();
+export class OrderEntityService extends InMemoryWorkflowEntity<Order, 'status'> {
+  constructor() {
+    super('status');
+  }
 
   async create(): Promise<Order> {
     const order: Order = {
@@ -35,34 +37,6 @@ export class OrderEntityService implements IWorkflowEntity<Order, OrderState> {
       totalAmount: 0,
       customerId: `customer-${Math.random().toString(36).substr(2, 9)}`,
     };
-    this.orders.set(order.id, order);
-    return order;
-  }
-
-  async load(urn: string | number): Promise<Order | null> {
-    return this.orders.get(String(urn)) || null;
-  }
-
-  async update(order: Order, status: OrderState): Promise<Order> {
-    const updated = { ...order, status };
-    this.orders.set(order.id, updated);
-    return updated;
-  }
-
-  status(order: Order): OrderState {
-    return order.status;
-  }
-
-  urn(order: Order): string | number {
-    return order.id;
-  }
-
-  // Test helpers
-  clear(): void {
-    this.orders.clear();
-  }
-
-  getAll(): Order[] {
-    return Array.from(this.orders.values());
+    return this.save(order);
   }
 }

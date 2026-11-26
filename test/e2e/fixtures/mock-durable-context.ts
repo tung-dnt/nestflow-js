@@ -12,7 +12,7 @@ export class MockDurableContext implements IDurableContext {
     info: (_msg: string, _data?: any) => {},
   };
 
-  async step<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  async step<T>(name: string, fn: () => Promise<T>, _options?: Parameters<IDurableContext['step']>[2]): Promise<T> {
     if (this.steps.has(name)) {
       return this.steps.get(name);
     }
@@ -78,6 +78,4 @@ export class MockDurableContext implements IDurableContext {
 /**
  * Mock withDurableExecution — returns the raw handler so tests can call it with a mock context.
  */
-export const mockWithDurableExecution: WithDurableExecution = (handler) => {
-  return handler as any;
-};
+export const mockWithDurableExecution: WithDurableExecution = (handler) => handler;

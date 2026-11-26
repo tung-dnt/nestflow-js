@@ -20,7 +20,7 @@ states: {
 |----------|---------|-------------|
 | **finals** | Terminal states — workflow is done | Orchestrator returns `{ status: 'final' }` |
 | **idles** | Pause states — waiting for external input | Orchestrator returns `{ status: 'idle' }`, adapter waits for callback |
-| **failed** | Error fallback — entity moves here on unhandled errors | Handler threw, entity auto-transitions to this state |
+| **failed** | Failure state | The orchestrator commits this state when a handler throws `UnretriableException` or its last attempt fails. |
 
 ```mermaid
 stateDiagram-v2
@@ -29,8 +29,8 @@ stateDiagram-v2
     PROCESSING --> SHIPPED: order.ship
     PROCESSING --> CANCELLED: order.cancel
     PENDING --> CANCELLED: order.cancel
-    PENDING --> FAILED: Error
-    PROCESSING --> FAILED: Error
+    PENDING --> FAILED: Terminal handler error
+    PROCESSING --> FAILED: Terminal handler error
     SHIPPED --> [*]
     CANCELLED --> [*]
     FAILED --> [*]
@@ -61,18 +61,18 @@ Transitions declare how entities move between states in response to events:
 
 When `orchestrator.transit()` is called:
 
-1. Match the event name against registered transitions
-2. Check the entity's current state is in the transition's `from` array
-3. Evaluate all condition functions (if any)
-4. Execute the `@OnEvent` handler
-5. Update the entity to the `to` state
-6. Determine the [TransitResult](/docs/api-reference/adapters#transitresult)
+1. Look up the workflow by event name.
+2. Claim the transition for the entity and event ID. If the service returns a receipt, skip the handler and use the receipt to resolve the result.
+3. Find the transition for the current state and event. Evaluate its guards.
+4. Validate the handler payload if a schema and validator are configured. Run the handler.
+5. Commit the entity state and receipt together.
+6. Resolve the [transit result](/docs/api-reference/adapters#transitresult) from the receipt.
 
 If multiple transitions match the same event and state but have different `to` states, the router throws `BadRequestException` — ambiguous state machines are not allowed.
 
 ## Conditional Transitions
 
-Add condition functions to gate when a transition fires. All conditions must return `true`:
+All conditions must return `true` for a transition to match. Keep guards pure. The orchestrator can evaluate them again when it resolves a continuation from a stored receipt, so they must not mutate data or depend on time or external state.
 
 ```typescript
 {
@@ -121,15 +121,13 @@ Workflow-level conditions apply to every transition in the workflow:
 
 ## Auto-Continuation
 
-When a transition lands in a state that is **neither idle nor final**, the orchestrator automatically looks for the next valid transition and returns `{ status: 'continued', nextEvent }`. The adapter feeds this back into `transit()` without external intervention.
+When a transition lands in a state that is neither idle nor final, the orchestrator looks for an unambiguous next transition. If it finds one, it returns `continued` with a `nextEvent` whose ID is derived from the preceding event. The adapter passes `nextEvent` back unchanged. On `no_transition`, the adapter waits for an explicit event.
 
 This enables multi-step workflows to chain automatically:
 
 ```
 PENDING (idle) → transit → PROCESSING → auto-continue → SHIPPED (final)
 ```
-
-Only idle states act as "breakpoints" where the workflow pauses.
 
 ## Related
 

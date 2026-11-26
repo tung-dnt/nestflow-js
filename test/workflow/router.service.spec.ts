@@ -1,24 +1,14 @@
 import { BadRequestException } from '@nestjs/common';
-import { Logger } from '@nestjs/common';
 import { RouterService } from '@/core/providers/router.service';
-import type { IWorkflowDefinition, IWorkflowEntity, PayloadValidator } from '@/core/types';
-import { beforeEach, describe, expect, test } from 'bun:test';
+import type { IWorkflowDefinition, PayloadValidator } from '@/core/types';
+import { describe, expect, test } from 'bun:test';
 
-// Minimal stubs for dependencies
-const mockLogger = new Logger('TestRouter');
-
-const mockEntityService: IWorkflowEntity = {
-  load: async (urn: string | number) => ({ id: urn, status: 'PENDING' }),
-  update: async (entity: any, status: any) => ({ ...entity, status }),
-  status: (entity: any) => entity.status,
-  urn: (entity: any) => entity.id,
-  create: async () => ({ id: '1', status: 'PENDING' }),
-};
+const mockEntityService = { status: (entity: { status: string }) => entity.status };
 
 const mockDefinition: IWorkflowDefinition<any, string, string> = {
   name: 'TestWorkflow',
   states: { finals: ['DONE'], idles: ['PENDING'], failed: 'FAILED' },
-  transitions: [{ event: 'start', from: 'PENDING', to: 'ACTIVE' }],
+  transitions: [{ event: 'start', from: ['PENDING'], to: 'ACTIVE' }],
   entityService: 'entity.test',
 };
 
@@ -47,9 +37,9 @@ describe('RouterService – payload validation', () => {
   const rawPayload = { amount: '42', name: 'test' };
 
   test('passes raw payload through when no dto is set', () => {
-    const router = new RouterService('start', mockEntityService, mockDefinition, mockLogger, null);
+    const router = new RouterService('start', mockEntityService, mockDefinition, null);
     const target = createHandlerTarget(/* no dto */);
-    const args = router.buildParamDecorators(entity, rawPayload, target, 'handle');
+    const args = router.buildParamDecorators(entity, rawPayload, target, 'handle', 'event-1');
 
     expect(args[0]).toBe(entity);
     expect(args[1]).toBe(rawPayload);
@@ -57,9 +47,9 @@ describe('RouterService – payload validation', () => {
 
   test('passes raw payload through when dto is set but no validator provided', () => {
     const fakeSchema = { type: 'object' };
-    const router = new RouterService('start', mockEntityService, mockDefinition, mockLogger, null);
+    const router = new RouterService('start', mockEntityService, mockDefinition, null);
     const target = createHandlerTarget(fakeSchema);
-    const args = router.buildParamDecorators(entity, rawPayload, target, 'handle');
+    const args = router.buildParamDecorators(entity, rawPayload, target, 'handle', 'event-1');
 
     expect(args[0]).toBe(entity);
     expect(args[1]).toBe(rawPayload);
@@ -73,9 +63,9 @@ describe('RouterService – payload validation', () => {
       return { ...p, amount: Number(p.amount) };
     };
 
-    const router = new RouterService('start', mockEntityService, mockDefinition, mockLogger, validator);
+    const router = new RouterService('start', mockEntityService, mockDefinition, validator);
     const target = createHandlerTarget(fakeSchema);
-    const args = router.buildParamDecorators(entity, rawPayload, target, 'handle');
+    const args = router.buildParamDecorators(entity, rawPayload, target, 'handle', 'event-1');
 
     expect(args[0]).toBe(entity);
     expect(args[1]).toEqual({ amount: 42, name: 'test' });
@@ -87,10 +77,12 @@ describe('RouterService – payload validation', () => {
       throw new Error('Invalid field "foo"');
     };
 
-    const router = new RouterService('start', mockEntityService, mockDefinition, mockLogger, validator);
+    const router = new RouterService('start', mockEntityService, mockDefinition, validator);
     const target = createHandlerTarget(fakeSchema);
 
-    expect(() => router.buildParamDecorators(entity, rawPayload, target, 'handle')).toThrow(BadRequestException);
+    expect(() => router.buildParamDecorators(entity, rawPayload, target, 'handle', 'event-1')).toThrow(
+      BadRequestException,
+    );
   });
 
   test('includes original error message in BadRequestException', () => {
@@ -99,11 +91,11 @@ describe('RouterService – payload validation', () => {
       throw new Error('field "email" is required');
     };
 
-    const router = new RouterService('start', mockEntityService, mockDefinition, mockLogger, validator);
+    const router = new RouterService('start', mockEntityService, mockDefinition, validator);
     const target = createHandlerTarget(fakeSchema);
 
     try {
-      router.buildParamDecorators(entity, rawPayload, target, 'handle');
+      router.buildParamDecorators(entity, rawPayload, target, 'handle', 'event-1');
       expect(true).toBe(false); // should not reach
     } catch (e) {
       expect(e).toBeInstanceOf(BadRequestException);
@@ -116,7 +108,7 @@ describe('RouterService – payload validation', () => {
       throw new Error('should not be called');
     };
 
-    const router = new RouterService('start', mockEntityService, mockDefinition, mockLogger, validator);
+    const router = new RouterService('start', mockEntityService, mockDefinition, validator);
 
     // Target with NO metadata — triggers legacy { entity, payload } shape
     class LegacyHandler {
@@ -125,7 +117,7 @@ describe('RouterService – payload validation', () => {
       }
     }
     const target = new LegacyHandler();
-    const args = router.buildParamDecorators(entity, rawPayload, target, 'handle');
+    const args = router.buildParamDecorators(entity, rawPayload, target, 'handle', 'event-1');
 
     expect(args).toEqual([{ entity, payload: rawPayload }]);
   });

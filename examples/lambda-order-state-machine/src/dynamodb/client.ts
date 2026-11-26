@@ -1,7 +1,7 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 
-const dynamoDBClient = new DynamoDBClient();
+const dynamoDBClient = new DynamoDBClient({ endpoint: process.env.DYNAMODB_ENDPOINT });
 
 export const DocumentClient = DynamoDBDocumentClient.from(dynamoDBClient, {
   marshallOptions: {

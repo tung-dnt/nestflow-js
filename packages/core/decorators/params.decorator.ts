@@ -1,8 +1,7 @@
 /**
  * Parameter decorator that injects the current workflow entity into a handler method.
  *
- * The entity is loaded via the {@link IWorkflowEntity.load} method of the
- * entity service registered in the workflow definition.
+ * The entity is loaded when the entity service claims the transition.
  *
  * @example
  * ```typescript
@@ -41,6 +40,18 @@ export function Payload<P>(dto?: P): ParameterDecorator {
       throw new Error('Payload decorator can only be used on method parameters');
     const existing: Array<any> = Reflect.getOwnMetadata('workflow:params', target, propertyKey) || [];
     existing.push({ index: parameterIndex, type: 'payload', dto });
+    Reflect.defineMetadata('workflow:params', existing, target, propertyKey);
+  };
+}
+
+/** Inject the stable delivery ID for downstream idempotency keys. */
+export function EventId(): ParameterDecorator {
+  return (target: object, propertyKey?: string | symbol, parameterIndex?: number) => {
+    if (!propertyKey || parameterIndex === undefined)
+      throw new Error('EventId decorator can only be used on method parameters');
+    const existing: Array<{ index: number; type: string }> =
+      Reflect.getOwnMetadata('workflow:params', target, propertyKey) || [];
+    existing.push({ index: parameterIndex, type: 'eventId' });
     Reflect.defineMetadata('workflow:params', existing, target, propertyKey);
   };
 }

@@ -1,12 +1,19 @@
-import type { IWorkflowEntity } from '@/core';
+import { randomUUID } from 'node:crypto';
+import type { IWorkflowEntity, IWorkflowEvent } from '@/core';
 
 /**
  * Create a workflow event for testing
  */
-export function createWorkflowEvent(event: string, urn: string | number, payload?: any, attempt = 0) {
+export function createWorkflowEvent(
+  event: string,
+  urn: string | number,
+  payload?: unknown,
+  attempt = 0,
+): IWorkflowEvent<unknown> {
   return {
     event,
     urn,
+    eventId: randomUUID(),
     payload,
     attempt,
   };

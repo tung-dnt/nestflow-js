@@ -4,19 +4,22 @@ description: Events trigger state transitions. Handlers run your business logic 
 ---
 
 
+## Event identity
+
+Every [`IWorkflowEvent`](/docs/api-reference/interfaces#iworkflowevent) has an `eventId`. Reuse the ID for retries and redeliveries of the same event. Never reuse it for a different event on the same entity. Auto-continuations have their own stable IDs, supplied in `nextEvent`.
+
 ## @OnEvent
 
-Binds a method to a specific event. When `orchestrator.transit({ event: 'order.submit', ... })` is called, the method decorated with `@OnEvent('order.submit')` runs:
+`@OnEvent` binds a method to an event name. The orchestrator runs the handler after it acquires a claim and finds a valid transition:
 
 ```typescript
 @OnEvent('order.submit')
-async onSubmit(@Entity() order: Order, @Payload() data: SubmitOrderDto) {
-  order.submittedAt = new Date();
-  return { processedAt: new Date().toISOString() };
+async onSubmit(@Entity() order: Order) {
+	return { orderId: order.id };
 }
 ```
 
-The return value becomes the payload of the next auto-continued event (if any).
+The orchestrator stores the handler output in the transition receipt. If the workflow continues automatically, the output becomes the next event's payload. Return only serializable data that is safe to persist.
 
 **Constraint:** Event names must be globally unique across all workflow classes. Duplicate `@OnEvent` handlers for the same event throw at startup.
 
@@ -24,7 +27,7 @@ The return value becomes the payload of the next auto-continued event (if any).
 
 ### @Entity()
 
-Injects the loaded entity into the handler parameter:
+Injects the entity snapshot from the transition claim:
 
 ```typescript
 @OnEvent('order.submit')
@@ -49,11 +52,15 @@ async onSubmit(
 }
 ```
 
-If no `@Entity()` or `@Payload()` decorators are used, the handler receives `{ entity, payload }` as a single argument (legacy style).
+### @EventId()
+
+Injects the stable delivery ID. Combine it with the entity ID for downstream idempotency when calling a payment service or another system with side effects. A crash before the transition commits can cause the handler to run again.
+
+If the handler has no parameter decorators, it receives `{ entity, payload }` as a single argument.
 
 ## @OnDefault
 
-Fallback handler for events that don't match any `@OnEvent`. Called before throwing `BadRequestException`:
+Runs before `BadRequestException` when a known event has no valid transition. If guards reject an otherwise matching transition in an idle state, the orchestrator returns `idle` instead.
 
 ```typescript
 @OnDefault

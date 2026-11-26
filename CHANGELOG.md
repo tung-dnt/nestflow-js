@@ -1,3 +1,9 @@
+## Unreleased
+
+- Require a stable `eventId` and a storage-backed `claimTransition` implementation.
+- Retry only transient handler errors and persist terminal failure only after the last attempt.
+- Keep execution identity local to each run. Enforce global guards, support numeric state `0`, validate handlers at startup, and omit raw payloads from transition logs.
+
 ## v0.1.15
 
 [compare changes](https://github.com/tung-dnt/nestflow-js/compare/v0.1.14...v0.1.15)

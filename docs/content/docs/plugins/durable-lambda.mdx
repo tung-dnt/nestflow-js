@@ -1,12 +1,9 @@
 ---
 title: Durable Lambda Adapter
-description: Long-running workflows that span minutes, hours, or days. Checkpoint each step, pause for human input, and resume exactly where you left off.
+description: Run workflows on AWS Durable Lambda with transition checkpoints, callbacks, and classified retries.
 ---
 
-
-## Overview
-
-The `DurableLambdaEventHandler` wraps your workflow in AWS Lambda's [Durable Execution SDK](https://docs.aws.amazon.com/lambda/latest/dg/durable-execution.html). Each workflow instance runs as a single durable execution spanning multiple Lambda invocations. Steps are checkpointed at event boundaries — on replay, completed steps return stored results.
+`DurableLambdaEventHandler` runs your workflow on the [AWS Lambda Durable Execution SDK](https://docs.aws.amazon.com/lambda/latest/dg/durable-execution.html). A durable execution can span multiple Lambda invocations. On replay, the SDK returns the results of completed step checkpoints.
 
 ## Setup
 
@@ -21,62 +18,48 @@ export const handler = DurableLambdaEventHandler(app, withDurableExecution);
 ```
 
 ### Parameters
+- `app`: NestJS application context containing the workflow module.
+- `withDurableExecution`: The `withDurableExecution` function from `@aws/durable-execution-sdk-js`.
 
-- `app` — NestJS application context containing the workflow module
-- `withDurableExecution` — the `withDurableExecution` function from `@aws/durable-execution-sdk-js`
+## Execution loop
 
-## How It Works
-
-The adapter loops over `transit()` calls, reacting to each [TransitResult](/docs/api-reference/adapters#transitresult):
+The adapter checkpoints each `transitAttempt()` call with `ctx.step()`. The adapter, not the SDK's step retry policy, controls handler retries.
 
 ```mermaid
 flowchart TD
-    A[Start: initialEvent] --> B[executeTransit]
-    B --> C{TransitResult?}
-    C -->|continued| D[Checkpoint via ctx.step]
-    D --> B
-    C -->|idle| E[ctx.waitForCallback]
-    E -->|callback received| B
-    C -->|no_transition| F[ctx.waitForCallback]
-    F -->|event received| B
-    C -->|final| G[Return result]
+    A[Initial event] --> B[Checkpoint transitAttempt]
+    B --> C{Attempt outcome}
+    C -->|retry| D[Wait for backoff]
+    D -->|same eventId| B
+    C -->|continued| E[Use nextEvent]
+    E --> B
+    C -->|idle or no_transition| F[Wait for callback]
+    F -->|checkpoint callback eventId| B
+    C -->|final| G[Return completed result]
+    C -->|error| H[Propagate error]
 ```
 
-1. **`continued`** — Checkpoints the next event via `ctx.step()`, then calls `transit()` again
-2. **`idle`** — Pauses via `ctx.waitForCallback()`. An external system resumes by calling `SendDurableExecutionCallbackSuccess`
-3. **`no_transition`** — Also pauses via `ctx.waitForCallback()`, waiting for an explicit event
-4. **`final`** — Returns the completed result, ending the durable execution
+`continued` supplies the next event. The adapter waits for a callback on `idle` and `no_transition`. On `final`, it returns `{ urn, status: 'completed', state }`. If the handler threw `UnretriableException`, `state` is the configured failed state.
 
-## Event Shape
+## Initial event
 
-The adapter expects a `DurableWorkflowEvent` and returns a `DurableWorkflowResult`:
+Pass a `DurableWorkflowEvent` with the target entity's `urn`, the first event name in `initialEvent`, and a stable `eventId`. The event `payload` is optional:
 
-```typescript
-interface DurableWorkflowEvent {
-  urn: string | number;      // Entity identifier
-  initialEvent: string;      // First event to fire
-  payload?: any;             // Optional initial payload
-}
-
-interface DurableWorkflowResult {
-  urn: string | number;
-  status: string;            // 'completed' (mapped from 'final')
-  state: string | number;    // Final state value
+```json
+{
+  "urn": "order-1",
+  "initialEvent": "order.created",
+  "eventId": "order-created-001"
 }
 ```
 
-## Idle State Callbacks
+Reuse the producer's `eventId` when you redeliver the same logical event for that entity. Do not reuse an ID for a different event on the same entity.
 
-When the workflow reaches an idle state, the adapter calls `ctx.waitForCallback()` and pauses:
+## Idle state callbacks
 
-```
-1. Event arrives → orchestrator sees entity is in idle state → returns { status: 'idle' }
-2. Adapter calls ctx.waitForCallback('idle:pending_approval:0', ...)
-3. Lambda returns, but durable execution stays open
-4. External system calls SendDurableExecutionCallbackSuccess → workflow resumes
-```
+When an event leaves the workflow idle or without an automatic transition, the adapter registers a callback with `ctx.waitForCallback()`. The Lambda invocation can return while the durable execution waits for the callback.
 
-### Resuming via Callback
+### Resuming via callback
 
 ```typescript
 import { LambdaClient, SendDurableExecutionCallbackSuccessCommand } from '@aws-sdk/client-lambda';
@@ -86,13 +69,15 @@ const lambda = new LambdaClient({});
 await lambda.send(new SendDurableExecutionCallbackSuccessCommand({
   CallbackId: callbackId,  // logged by the adapter when it paused
   Result: JSON.stringify({
-    event: 'order.approve',
+    event: 'order.created',
     payload: { approved: true },
   }),
 }));
 ```
 
-### Timeout Configuration
+The callback result contains `event` and, if needed, `payload`. Do not provide `eventId`. The adapter checkpoints a separate ID for each callback. Replay of that callback reuses its ID, even if another execution started from the same initial event.
+
+### Timeout configuration
 
 The default callback timeout is **24 hours**. Configure per-state timeouts via `IdleStateEntry`:
 
@@ -109,131 +94,23 @@ The default callback timeout is **24 hours**. Configure per-state timeouts via `
 })
 ```
 
-## Retry Integration
+## Retry integration
 
-The adapter respects `@WithRetry` configuration. On each failed attempt:
+`@WithRetry` sets the attempt budget and backoff for a handler within one durable execution. Without it, the adapter runs one attempt. The adapter disables SDK automatic retries for transition steps. A new execution has a new budget, but a committed receipt still prevents the handler from running again for the same `eventId`.
 
-1. Catches the error (unless `UnretriableException`)
-2. Calculates delay via `RetryBackoff.calculateDelay(attempt, retryConfig)`
-3. Calls `ctx.wait({ seconds })` for a durable sleep between attempts
-4. Retries the `transit()` call
+The adapter calls `transitAttempt(event, canRetry)` with `canRetry` set to `true` only if another attempt remains. It starts another attempt only on `{ status: 'retry' }`. It waits with `ctx.wait()`, then reuses the `eventId` and increments `attempt`. The orchestrator does not advance the state or write a completion receipt for an attempt that requests a retry.
 
-```typescript
-@OnEvent('payment.authorize')
-@WithRetry({
-  handler: 'handleAuthorize',
-  maxAttempts: 3,
-  strategy: RetryStrategy.EXPONENTIAL_JITTER,
-  initialDelay: 1000,
-  maxDelay: 30000,
-})
-async handleAuthorize(@Entity() payment: Payment) {
-  // Transient failures → retried with durable waits
-  // UnretriableException → immediate failure, no retry
-}
-```
+On the last attempt, a handler error commits the failed state and an exhaustion receipt, then propagates. A handler's `UnretriableException` commits the failed state and returns `final` without retrying. Validation, guard, storage, and post-commit errors propagate without an adapter retry, as do claim conflicts.
 
-## IDurableContext Interface
+A worker can stop before commit. When the storage lease expires, a later delivery can run the handler again. Use [`@EventId()` for external side effects](/docs/recipes/retry-and-error-handling#make-side-effects-idempotent). See [failure classification](/docs/recipes/retry-and-error-handling#classify-failures) for the full behavior.
 
-The `IDurableContext` abstracts the durable execution runtime. The real implementation comes from `@aws/durable-execution-sdk-js`; the interface is exported for mocking:
+## Test with the AWS local runner
 
-```typescript
-import type { IDurableContext } from 'nestflow-js/adapter';
-
-interface IDurableContext {
-  step<T>(name: string, fn: () => Promise<T>): Promise<T>;
-  waitForCallback<T>(
-    name: string,
-    onRegister: (callbackId: string) => Promise<void>,
-    options?: { timeout?: { hours?: number; minutes?: number; seconds?: number } },
-  ): Promise<T>;
-  wait(duration: { seconds?: number; minutes?: number; hours?: number }): Promise<void>;
-  logger: { info(msg: string, data?: any): void };
-}
-```
-
-## Testing with MockDurableContext
-
-Mock the durable context for tests without deploying to AWS:
-
-```typescript
-import { Test } from '@nestjs/testing';
-import { WorkflowModule } from 'nestflow-js/core';
-import { DurableLambdaEventHandler } from 'nestflow-js/adapter';
-import type { IDurableContext } from 'nestflow-js/adapter';
-
-class MockDurableContext implements IDurableContext {
-  private steps = new Map<string, any>();
-  private callbacks = new Map<string, { resolve: (value: any) => void }>();
-
-  logger = { info: (_msg: string, _data?: any) => {} };
-
-  async step<T>(name: string, fn: () => Promise<T>): Promise<T> {
-    if (this.steps.has(name)) return this.steps.get(name);
-    const result = await fn();
-    this.steps.set(name, result);
-    return result;
-  }
-
-  async waitForCallback<T>(
-    name: string,
-    onRegister: (callbackId: string) => Promise<void>,
-  ): Promise<T> {
-    const callbackId = `callback:${name}`;
-    let resolve: (value: any) => void;
-    const promise = new Promise<T>((r) => { resolve = r; });
-    this.callbacks.set(callbackId, { resolve: resolve! });
-    await onRegister(callbackId);
-    return promise;
-  }
-
-  async wait(): Promise<void> {}
-
-  submitCallback(name: string, payload: any): void {
-    const entry = this.callbacks.get(`callback:${name}`);
-    if (!entry) throw new Error(`No callback registered for: callback:${name}`);
-    entry.resolve(payload);
-  }
-}
-
-// Mock withDurableExecution — pass-through
-const mockWithDurableExecution = (handler) => handler as any;
-
-// Usage
-const module = await Test.createTestingModule({
-  imports: [
-    WorkflowModule.register({
-      entities: [{ provide: 'entity.order', useValue: new OrderEntityService() }],
-      workflows: [OrderWorkflow],
-    }),
-  ],
-}).compile();
-
-const app = module.createNestApplication();
-await app.init();
-
-const handler = DurableLambdaEventHandler(app, mockWithDurableExecution);
-const ctx = new MockDurableContext();
-
-// Start workflow — pauses at idle state
-const resultPromise = handler(
-  { urn: 'order-1', initialEvent: 'order.created', payload: {} },
-  ctx,
-);
-
-// Simulate callback
-ctx.submitCallback('idle:pending:0', {
-  event: 'order.submit',
-  payload: { approved: true },
-});
-
-const result = await resultPromise;
-// result.status === 'completed'
-```
+Use the [Durable Lambda order tests](https://github.com/tung-dnt/nestflow-js/blob/main/test/e2e/durable/durable-order.spec.ts) as a starting point. They use the AWS local runner and wait for callback registration before sending the result. To supply your own test context, use the exported [`IDurableContext` contract](https://github.com/tung-dnt/nestflow-js/blob/main/packages/adapter/durable-lambda.adapter.ts).
 
 ## Related
 
-- [Adapters API](/docs/api-reference/adapters) — TransitResult, BaseWorkflowAdapter
-- [Human in the Loop](/docs/recipes/human-in-the-loop) — idle state + callback pattern
-- [Custom Adapter](/docs/recipes/custom-adapter) — build your own adapter
-- [Lambda Order Example](/docs/examples/lambda-order-state-machine) — complete deployment example
+- [Adapters API](/docs/api-reference/adapters)
+- [Human in the loop recipe](/docs/recipes/human-in-the-loop)
+- [Custom adapter recipe](/docs/recipes/custom-adapter)
+- [Lambda order example](/docs/examples/lambda-order-state-machine)

@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { Test } from '@nestjs/testing';
-import { withDurableExecution } from '@aws/durable-execution-sdk-js';
+import { withDurableExecution, type DurableLambdaHandler } from '@aws/durable-execution-sdk-js';
 import { LocalDurableTestRunner, WaitingOperationStatus } from '@aws/durable-execution-sdk-js-testing';
 import { WorkflowModule } from '@/core';
 import { DurableLambdaEventHandler } from '@/adapter';
@@ -13,7 +13,7 @@ import {
 import { OnboardingState, UserEntityService } from '../workflows/user-onboarding/user.entity';
 
 describe('Durable Lambda Adapter — User Onboarding E2E', () => {
-  let handler: ReturnType<typeof DurableLambdaEventHandler>;
+  let handler: DurableLambdaHandler;
   let entityService: UserEntityService;
 
   beforeAll(async () => {
@@ -32,7 +32,7 @@ describe('Durable Lambda Adapter — User Onboarding E2E', () => {
     await app.init();
 
     entityService = module.get<UserEntityService>(ONBOARDING_ENTITY_TOKEN);
-    handler = DurableLambdaEventHandler(app, withDurableExecution as any);
+    handler = DurableLambdaEventHandler(app, withDurableExecution);
   });
 
   afterAll(async () => {
@@ -47,21 +47,19 @@ describe('Durable Lambda Adapter — User Onboarding E2E', () => {
     const user = await entityService.create();
     await entityService.update(user, OnboardingState.REGISTRATION);
 
-    const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler as any });
+    const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler });
 
     // Pre-register callback operation references
     const emailCallback = runner.getOperation(`idle:${OnboardingState.EMAIL_VERIFICATION}:0`);
     const profileCallback = runner.getOperation(`idle:${OnboardingState.PROFILE_SETUP}:1`);
 
     const executionPromise = runner.run({
-      payload: { urn: user.id, initialEvent: OnboardingEvent.REGISTERED },
+      payload: { urn: user.id, eventId: `${user.id}:registered`, initialEvent: OnboardingEvent.REGISTERED },
     });
 
     // Wait for EMAIL_VERIFICATION idle callback, then submit
     await emailCallback.waitForData(WaitingOperationStatus.SUBMITTED);
-    await emailCallback.sendCallbackSuccess(
-      JSON.stringify({ event: OnboardingEvent.EMAIL_VERIFIED, payload: {} }),
-    );
+    await emailCallback.sendCallbackSuccess(JSON.stringify({ event: OnboardingEvent.EMAIL_VERIFIED, payload: {} }));
 
     // Wait for PROFILE_SETUP idle callback, then submit
     await profileCallback.waitForData(WaitingOperationStatus.SUBMITTED);
@@ -89,18 +87,16 @@ describe('Durable Lambda Adapter — User Onboarding E2E', () => {
     const user = await entityService.create();
     await entityService.update(user, OnboardingState.REGISTRATION);
 
-    const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler as any });
+    const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler });
 
     const emailCallback = runner.getOperation(`idle:${OnboardingState.EMAIL_VERIFICATION}:0`);
 
     const executionPromise = runner.run({
-      payload: { urn: user.id, initialEvent: OnboardingEvent.REGISTERED },
+      payload: { urn: user.id, eventId: `${user.id}:registered`, initialEvent: OnboardingEvent.REGISTERED },
     });
 
     await emailCallback.waitForData(WaitingOperationStatus.SUBMITTED);
-    await emailCallback.sendCallbackSuccess(
-      JSON.stringify({ event: OnboardingEvent.ABANDONED, payload: {} }),
-    );
+    await emailCallback.sendCallbackSuccess(JSON.stringify({ event: OnboardingEvent.ABANDONED, payload: {} }));
 
     const execution = await executionPromise;
 
@@ -116,19 +112,17 @@ describe('Durable Lambda Adapter — User Onboarding E2E', () => {
     const user = await entityService.create();
     await entityService.update(user, OnboardingState.REGISTRATION);
 
-    const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler as any });
+    const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler });
 
     const emailCallback = runner.getOperation(`idle:${OnboardingState.EMAIL_VERIFICATION}:0`);
     const profileCallback = runner.getOperation(`idle:${OnboardingState.PROFILE_SETUP}:1`);
 
     const executionPromise = runner.run({
-      payload: { urn: user.id, initialEvent: OnboardingEvent.REGISTERED },
+      payload: { urn: user.id, eventId: `${user.id}:registered`, initialEvent: OnboardingEvent.REGISTERED },
     });
 
     await emailCallback.waitForData(WaitingOperationStatus.SUBMITTED);
-    await emailCallback.sendCallbackSuccess(
-      JSON.stringify({ event: OnboardingEvent.EMAIL_VERIFIED, payload: {} }),
-    );
+    await emailCallback.sendCallbackSuccess(JSON.stringify({ event: OnboardingEvent.EMAIL_VERIFIED, payload: {} }));
 
     await profileCallback.waitForData(WaitingOperationStatus.SUBMITTED);
     await profileCallback.sendCallbackSuccess(

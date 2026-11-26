@@ -1,8 +1,9 @@
 ---
 title: Quick Start
-description: Get a workflow running in 5 minutes with NestflowJS.
+description: Register an order workflow and submit an event with a stable ID.
 ---
 
+This guide registers an order workflow and submits its first event. To run the complete application with DynamoDB, use the [Lambda order state machine](https://github.com/tung-dnt/nestflow-js/tree/main/examples/lambda-order-state-machine).
 
 ## Installation
 
@@ -20,50 +21,22 @@ export enum OrderStatus {
   Failed = 'failed',
 }
 
-export class Order {
-  id: string;
-  status: OrderStatus;
+export interface Order {
+	id: string;
+	status: OrderStatus;
 }
 ```
 
 ## 2. Create an Entity Service
 
-The entity service tells the workflow engine how to load, save, and inspect your entities:
+Use a storage-backed `IWorkflowEntity<Order, OrderStatus>` implementation. Its `claimTransition(urn, eventId)` method must acquire an exclusive claim or return the receipt for an event that already committed.
 
-```typescript
-import { Injectable } from '@nestjs/common';
-import { IWorkflowEntity } from 'nestflow-js/core';
-
-@Injectable()
-export class OrderEntityService implements IWorkflowEntity<Order, OrderStatus> {
-  async create(): Promise<Order> {
-    // Create and persist a new order
-  }
-
-  async load(urn: string): Promise<Order | null> {
-    // Load order from database
-  }
-
-  async update(entity: Order, status: OrderStatus): Promise<Order> {
-    entity.status = status;
-    // Persist and return
-    return entity;
-  }
-
-  status(entity: Order): OrderStatus {
-    return entity.status;
-  }
-
-  urn(entity: Order): string {
-    return entity.id;
-  }
-}
-```
+For a working implementation, see the [DynamoDB entity service](https://github.com/tung-dnt/nestflow-js/blob/main/examples/lambda-order-state-machine/src/order/order-entity.service.ts). See [entity service](/docs/concepts/entity-service) for the storage requirements.
 
 ## 3. Define a Workflow
 
 ```typescript
-import { Workflow, OnEvent, Entity, Payload } from 'nestflow-js/core';
+import { Workflow, OnEvent, Entity } from 'nestflow-js/core';
 
 @Workflow({
   name: 'OrderWorkflow',
@@ -87,21 +60,21 @@ import { Workflow, OnEvent, Entity, Payload } from 'nestflow-js/core';
   entityService: 'entity.order',
 })
 export class OrderWorkflow {
-  @OnEvent('order.submit')
-  async onSubmit(@Entity() order: Order, @Payload() data: any) {
-    console.log('Order submitted:', order.id);
-    return order;
-  }
+	@OnEvent('order.submit')
+	async onSubmit(@Entity() order: Order) {
+		return { orderId: order.id };
+	}
 
-  @OnEvent('order.complete')
-  async onComplete(@Entity() order: Order) {
-    console.log('Order completed:', order.id);
-    return order;
-  }
+	@OnEvent('order.complete')
+	async onComplete(@Entity() order: Order) {
+		return { orderId: order.id };
+	}
 }
 ```
 
 ## 4. Register the Module
+
+Register your storage-backed `OrderEntityService` under the token used in the workflow definition.
 
 ```typescript
 import { Module } from '@nestjs/common';
@@ -120,27 +93,32 @@ import { WorkflowModule } from 'nestflow-js/core';
 export class OrderModule {}
 ```
 
-## 5. Transit an Event
+## 5. Submit an event
+
+Create a pending order through your entity service. Pass its ID and the ID of the command that submits it. Preserve that command ID if you redeliver the event.
 
 ```typescript
+import { Injectable } from '@nestjs/common';
 import { OrchestratorService } from 'nestflow-js/core';
 
 @Injectable()
-export class MyService {
-  constructor(private orchestrator: OrchestratorService) {}
+export class OrderService {
+	constructor(private readonly orchestrator: OrchestratorService) {}
 
-  async submitOrder(orderId: string) {
-    const result = await this.orchestrator.transit({
-      event: 'order.submit',
-      urn: orderId,
-      payload: {},
-      attempt: 0,
-    });
-
-    console.log(result.status); // 'final' | 'idle' | 'continued' | 'no_transition'
-  }
+	submitOrder(orderId: string, commandId: string) {
+		return this.orchestrator.transit({
+			event: 'order.submit',
+			urn: orderId,
+			eventId: commandId,
+			attempt: 0,
+		});
+	}
 }
 ```
+
+The first call commits `Processing` and returns `continued` with an `order.complete` event. Pass `result.nextEvent` unchanged to `transit()` to finish the workflow. The next result is `final` with state `Completed`.
+
+If another transition holds the entity claim, the call raises `ConflictException` (HTTP 409). Requeue the same event with backoff instead of assigning a new ID. `transit()` itself does not retry.
 
 ## Next Steps
 

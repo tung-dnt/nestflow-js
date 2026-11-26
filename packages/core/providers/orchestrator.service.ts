@@ -10,12 +10,20 @@ import {
   type IWorkflowHandler,
   type TDefaultHandler,
   type TransitResult,
+  type TransitionCompletion,
+  type TransitionReceipt,
 } from '@/core';
 import { UnretriableException } from '@/exception/unretriable.exception';
-import { BadRequestException, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { DiscoveryService, ModuleRef } from '@nestjs/core';
+import { createHash } from 'node:crypto';
 import type { IWorkflowEvent } from '../types/workflow-event.interface';
 import { StateRouterHelperFactory } from './router.factory';
+
+function transitionFailure(message: string, cause: unknown, storageError: unknown): AggregateError {
+  const diagnostic = cause instanceof Error ? `${message}: ${cause.message}` : message;
+  return new AggregateError([cause, storageError], diagnostic, { cause });
+}
 
 /**
  * Central orchestration engine that discovers workflow definitions at startup
@@ -44,19 +52,33 @@ export class OrchestratorService implements OnModuleInit {
       if (!instance?.constructor) continue;
 
       const [workflowDefinition, handlerStore, defaultHandler] = [
-        Reflect.getMetadata(WORKFLOW_DEFINITION_KEY, instance.constructor) as IWorkflowDefinition<
-          object,
-          string,
-          string
-        >,
-        Reflect.getMetadata(WORKFLOW_HANDLER_KEY, instance.constructor) as IWorkflowHandler[],
-        Reflect.getMetadata(WORKFLOW_DEFAULT_EVENT, instance.constructor) as TDefaultHandler<object>,
-        [],
+        Reflect.getMetadata(WORKFLOW_DEFINITION_KEY, instance.constructor) as
+          | IWorkflowDefinition<unknown, string, string | number>
+          | undefined,
+        Reflect.getMetadata(WORKFLOW_HANDLER_KEY, instance.constructor) as IWorkflowHandler[] | undefined,
+        Reflect.getMetadata(WORKFLOW_DEFAULT_EVENT, instance.constructor) as TDefaultHandler<unknown> | undefined,
       ];
 
-      if (!handlerStore || handlerStore.length === 0 || !workflowDefinition) continue;
+      if (!workflowDefinition) continue;
+
+      const events = new Set(handlerStore?.map((handler) => handler.event));
+      for (const transition of workflowDefinition.transitions) {
+        const transitionEvents = Array.isArray(transition.event) ? transition.event : [transition.event];
+        if (transitionEvents.length === 0) {
+          throw new Error(`Empty transition event list in workflow: ${workflowDefinition.name}`);
+        }
+        for (const event of transitionEvents) {
+          if (!events.has(event)) {
+            throw new Error(`No handler registered for event: ${event} in workflow: ${workflowDefinition.name}`);
+          }
+        }
+      }
+      if (!handlerStore?.length) continue;
 
       const entityService = this.moduleRef.get<IWorkflowEntity>(workflowDefinition.entityService, { strict: true });
+      if (typeof entityService.claimTransition !== 'function') {
+        throw new Error(`Entity service for workflow ${workflowDefinition.name} must implement claimTransition`);
+      }
 
       for (const handler of handlerStore) {
         if (this.routes.has(handler.event)) {
@@ -68,6 +90,9 @@ export class OrchestratorService implements OnModuleInit {
         const retryConfig = Reflect.getMetadata(getRetryKey(handler.name), handler.handler) as
           | IBackoffRetryConfig
           | undefined;
+        if (retryConfig && (!Number.isSafeInteger(retryConfig.maxAttempts) || retryConfig.maxAttempts < 1)) {
+          throw new Error(`Invalid maxAttempts for event: ${handler.event} in workflow: ${workflowDefinition.name}`);
+        }
 
         this.routes.set(handler.event, {
           handler: handler.handler,
@@ -91,116 +116,126 @@ export class OrchestratorService implements OnModuleInit {
     return this.routes.get(event)?.retryConfig;
   }
 
-  /**
-   * Execute a single state transition for the given workflow event.
-   *
-   * Loads the entity, finds a valid transition, runs the handler, updates
-   * the entity status, and returns a {@link TransitResult} describing what
-   * happened and what the caller should do next.
-   *
-   * @throws {BadRequestException} If no workflow is registered for the event,
-   *   the entity is not found, or no valid transition matches.
-   */
-  async transit(params: IWorkflowEvent): Promise<TransitResult> {
-    const { urn, payload, event } = params;
+  /** Execute one attempt. Direct callers do not schedule handler retries. */
+  transit(params: IWorkflowEvent): Promise<TransitResult> {
+    return this.transitAttempt(params, false);
+  }
+
+  /** Execute an attempt for an adapter. Only handler errors can request a retry. */
+  transitAttempt(params: IWorkflowEvent, canRetry: false): Promise<TransitResult>;
+  transitAttempt(params: IWorkflowEvent, canRetry: boolean): Promise<TransitResult | { status: 'retry' }>;
+  async transitAttempt(params: IWorkflowEvent, canRetry: boolean): Promise<TransitResult | { status: 'retry' }> {
+    const { urn, payload, event, eventId } = params;
+    if (typeof eventId !== 'string' || !eventId.trim()) {
+      throw new BadRequestException('A stable workflow eventId is required');
+    }
 
     const route = this.routes.get(event);
     if (!route) throw new BadRequestException(`No workflow found for event: ${event}`);
     const { definition, instance, defaultHandler, entityService, handlerName, handler } = route;
-
-    if (!definition) {
-      const className = instance.name;
-      throw new BadRequestException(
-        `Workflow definition metadata is missing for controller class "${className}". Ensure @Workflow(...) is applied to the class and that decorators are not reordered.`,
-      );
-    }
-
     const logger = new Logger(`Router::${definition.name}`);
-    const routerHelper = this.routerHelperFactory.create(event, entityService, definition, logger);
-    logger.log(`Method ${route.handlerName} is being called with arguments:`, params);
+    const router = this.routerHelperFactory.create(event, entityService, definition);
+    logger.log(`Handling workflow event ${event}`, { urn, eventId, handler: handlerName });
 
-    // ========================= BEGIN routing logic =========================
-    let entity = await routerHelper.loadAndValidateEntity(urn);
+    const claim = await entityService.claimTransition(urn, eventId);
+    if (claim.kind === 'missing') throw new BadRequestException('Entity not found', String(urn));
+    if (claim.kind === 'busy') throw new ConflictException(`Entity ${urn} already has a transition in progress`);
 
-    const entityStatus = entityService.status(entity);
-    const { transition, hasEventStateMatch } = routerHelper.findValidTransition(entity, payload);
+    let receipt: TransitionReceipt<unknown>;
+    if (claim.kind === 'completed') {
+      receipt = claim.receipt;
+    } else {
+      const { entity } = claim;
+      let committed = false;
+      let failure: { cause: unknown } | undefined;
+      try {
+        const state = entityService.status(entity);
+        const { transition, hasEventStateMatch } = router.findValidTransition(entity, payload);
+        if (!transition) {
+          if (hasEventStateMatch && router.isInIdleStatus(entity)) {
+            return {
+              status: 'idle',
+              state,
+              timeout: router.getIdleTimeout(state) ?? definition.defaultCallbackTimeout,
+            };
+          }
+          await defaultHandler?.call(instance, entity, event, payload);
+          throw new BadRequestException(`No matched transition for event: ${event}, status: ${state}`);
+        }
 
-    if (!transition) {
-      // Idle states: silently wait when a transition exists but conditions aren't met
-      if (hasEventStateMatch && routerHelper.isInIdleStatus(entity)) {
-        logger.log(`Entity ${urn} is in idle state ${entityStatus}. Conditions not met — waiting for next event.`);
-        const timeout = routerHelper.getIdleTimeout(entityStatus) ?? definition.defaultCallbackTimeout;
-        return { status: 'idle', state: entityStatus, timeout };
+        const args = router.buildParamDecorators(entity, payload, instance, handlerName, eventId);
+        let completion: TransitionCompletion;
+        let handlerFailure: { cause: unknown } | undefined;
+        try {
+          const output: unknown = await handler.apply(instance, args);
+          completion = { kind: 'applied', output };
+        } catch (cause) {
+          if (cause instanceof UnretriableException) {
+            completion = { kind: 'unretriable' };
+          } else {
+            if (canRetry) {
+              failure = { cause };
+              return { status: 'retry' };
+            }
+            completion = { kind: 'exhausted' };
+          }
+          handlerFailure = { cause };
+        }
+
+        try {
+          receipt = await claim.commit(
+            completion.kind === 'applied' ? transition.to : definition.states.failed,
+            completion,
+          );
+          committed = true;
+        } catch (error) {
+          if (!handlerFailure) throw error;
+          throw transitionFailure('Could not record workflow handler failure', handlerFailure.cause, error);
+        }
+        logger.log('Workflow transition committed', { urn, eventId, outcome: completion.kind });
+        if (completion.kind === 'exhausted') throw handlerFailure?.cause;
+      } catch (cause) {
+        failure = { cause };
+        throw cause;
+      } finally {
+        if (!committed) {
+          try {
+            await claim.release();
+          } catch (error) {
+            if (!failure) throw error;
+            throw transitionFailure('Could not release workflow transition claim', failure.cause, error);
+          }
+        }
       }
-      if (defaultHandler) {
-        logger.log(`Falling back to the default transition`, urn);
-        await defaultHandler.call(instance, entity, event, payload);
-      }
-      throw new BadRequestException(
-        `No matched transition for event: ${event}, status: ${entityStatus}. Please verify your workflow definition!`,
-      );
     }
 
-    try {
-      logger.log('======= WORKFLOW STEP STARTED =======');
-      logger.log(`Executing transition from ${entityStatus} to ${transition.to} (${urn})`);
-
-      const args = routerHelper.buildParamDecorators(entity, payload, instance, handlerName);
-      const handlerOutput = await handler.apply(instance, args);
-
-      // Update entity status
-      entity = await entityService.update(entity, transition.to);
-      logger.log(`Element transitioned from ${entityStatus} to ${transition.to} (${urn})`);
-
-      const updatedStatus = entityService.status(entity);
-
-      // Final state — workflow complete
-      const definedFinalStates = definition.states.finals as Array<string | number>;
-      if (definedFinalStates.includes(updatedStatus)) {
-        logger.log(`Element ${urn} reached final state: ${updatedStatus}`);
-        return { status: 'final', state: updatedStatus };
-      }
-
-      // Idle state — wait for explicit external event
-      if (routerHelper.isInIdleStatus(entity)) {
-        logger.log(`Element ${urn} reached idle state: ${updatedStatus}. Waiting for explicit event.`);
-        const timeout = routerHelper.getIdleTimeout(updatedStatus) ?? definition.defaultCallbackTimeout;
-        return { status: 'idle', state: updatedStatus, timeout };
-      }
-
-      // Find next valid transition
-      const { transition: nextTransition } = routerHelper.findValidTransition(entity, handlerOutput, {
-        skipEventCheck: true,
-      });
-
-      if (!nextTransition) {
-        logger.warn(`There's no valid next transition from ${updatedStatus} or the condition is not met. (${urn})`);
-        return { status: 'no_transition', state: updatedStatus, timeout: definition.defaultCallbackTimeout };
-      }
-
-      const nextEvent = Array.isArray(nextTransition.event) ? nextTransition.event[0] : nextTransition.event;
-      logger.log(`Next event: ${nextEvent} for entity ${urn}`);
-      return {
-        status: 'continued',
-        nextEvent: {
-          event: nextEvent as string,
-          urn,
-          payload: handlerOutput,
-          attempt: 0,
-        },
-      };
-    } catch (e) {
-      await entityService.update(entity, definition.states.failed);
-      logger.error(`Transition failed. Setting status to failed (${(e as Error).message})`, urn);
-      // UnretriableException signals a permanent failure — don't rethrow so the
-      // message is not retried by the broker/Lambda adapter.
-      if (!(e instanceof UnretriableException)) {
-        throw e;
-      }
-      return {
-        status: 'final',
-        state: definition.states.failed as string | number,
-      };
+    const { entity, completion } = receipt;
+    const state = entityService.status(entity);
+    if (completion.kind === 'exhausted') throw new Error(`Workflow handler retry budget exhausted for event: ${event}`);
+    if (completion.kind === 'unretriable' || definition.states.finals.includes(state)) {
+      return { status: 'final', state };
     }
+    if (router.isInIdleStatus(entity)) {
+      return { status: 'idle', state, timeout: router.getIdleTimeout(state) ?? definition.defaultCallbackTimeout };
+    }
+
+    const { transition: nextTransition } = router.findValidTransition(entity, completion.output, {
+      skipEventCheck: true,
+    });
+    if (!nextTransition) return { status: 'no_transition', state, timeout: definition.defaultCallbackTimeout };
+
+    const nextEvent = Array.isArray(nextTransition.event) ? nextTransition.event[0] : nextTransition.event;
+    return {
+      status: 'continued',
+      nextEvent: {
+        event: nextEvent,
+        urn,
+        eventId: createHash('sha256')
+          .update(JSON.stringify(['nestflow:continue', eventId, nextEvent]))
+          .digest('hex'),
+        payload: completion.output,
+        attempt: 0,
+      },
+    };
   }
 }

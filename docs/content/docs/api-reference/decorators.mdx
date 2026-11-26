@@ -44,7 +44,12 @@ Marks a class as a workflow definition.
   ],
   entityService: 'entity.order',
 })
-export class OrderWorkflow {}
+export class OrderWorkflow {
+	@OnEvent('order.submit')
+	onSubmit(@Entity() order: Order) {
+		return { orderId: order.id };
+	}
+}
 ```
 
 ## @OnEvent
@@ -73,7 +78,7 @@ async onSubmit(@Entity() entity: Order, @Payload() data: any) {
 
 ## @OnDefault
 
-Defines a fallback handler for unhandled events.
+Defines a fallback for a known event with no valid transition. It does not run for unknown events or when guards block an otherwise matching transition in an idle state.
 
 ### Signature
 
@@ -113,17 +118,17 @@ async onSubmit(@Entity() entity: Order) {
 
 ## @Payload
 
-Injects the event payload into the handler method. Optionally accepts a DTO class for validation.
+Injects the event payload into the handler. To validate the payload, pass a schema and register a `payloadValidator`.
 
 ### Signature
 
 ```typescript
-@Payload(dto?: Class)
+@Payload<P>(dto?: P)
 ```
 
 ### Parameters
 
-- `dto?`: Optional DTO class for payload validation and transformation
+- `dto?`: Optional schema passed to the registered payload validator
 
 ### Example
 
@@ -138,9 +143,17 @@ async onSubmit(
 }
 ```
 
+## @EventId
+
+Injects `IWorkflowEvent.eventId` as a `string`. The ID stays the same across retry attempts and redeliveries. Pair the ID with the entity ID when the downstream idempotency key must be unique across entities.
+
+```typescript
+@EventId()
+```
+
 ## @WithRetry
 
-Adds retry logic to event handlers.
+Attaches handler retry configuration for adapters. The Durable Lambda adapter reads it. Calling `OrchestratorService.transit()` directly runs one attempt regardless of this configuration.
 
 ```typescript
 import { WithRetry, RetryStrategy } from 'nestflow-js/core';
@@ -156,7 +169,7 @@ import { WithRetry, RetryStrategy } from 'nestflow-js/core';
 
 - `config`: Retry configuration object:
   - `handler`: Name of the handler method (required)
-  - `maxAttempts`: Maximum number of retry attempts
+  - `maxAttempts`: Positive safe integer. Maximum total attempts, including the initial attempt.
   - `strategy?`: Backoff strategy (`RetryStrategy.FIXED` | `RetryStrategy.EXPONENTIAL` | `RetryStrategy.EXPONENTIAL_JITTER`). Defaults to `RetryStrategy.EXPONENTIAL_JITTER`
   - `initialDelay?`: Base delay in milliseconds (default 1000)
   - `backoffMultiplier?`: Multiplier per attempt (default 2)
@@ -175,8 +188,8 @@ import { WithRetry, RetryStrategy } from 'nestflow-js/core';
   maxDelay: 30000,
 })
 async processPayment(@Entity() entity: Order) {
-  // Will retry up to 3 times with exponential backoff
-  return entity;
+	// A retry-aware adapter allows up to three total attempts.
+	return entity;
 }
 ```
 

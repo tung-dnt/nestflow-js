@@ -73,11 +73,11 @@ export interface IWorkflowDefinition<T, Event, State> {
  * @internal
  */
 export interface IWorkflowDefaultRoute {
-  instance: any;
-  definition: IWorkflowDefinition<any, string, string>;
+  instance: object;
+  definition: IWorkflowDefinition<unknown, string, string | number>;
   handlerName: string;
-  handler: (...payload: any[]) => Promise<any>;
-  defaultHandler?: TDefaultHandler<any>;
+  handler: (...payload: unknown[]) => Promise<unknown>;
+  defaultHandler?: TDefaultHandler<unknown>;
   entityService: IWorkflowEntity;
   retryConfig?: IBackoffRetryConfig;
 }

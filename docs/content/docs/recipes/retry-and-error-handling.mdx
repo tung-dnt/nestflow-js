@@ -1,131 +1,68 @@
 ---
 title: Retry and Error Handling
-description: Handle retries with exponential backoff and jitter. Built-in support for UnretriableException and payload validation.
+description: Configure adapter retries and distinguish handler failures from errors that must propagate.
 ---
 
+## Configure handler retries
 
-## @WithRetry Decorator
+Use `@WithRetry` to set the attempt budget and backoff for a handler. The [Durable Lambda adapter](/docs/plugins/durable-lambda#retry-integration) and [retry-aware custom adapters](/docs/recipes/custom-adapter#retry-only-classified-handler-failures) use that configuration. `orchestrator.transit()` always runs one attempt, even with `@WithRetry`.
 
-Add `@WithRetry` to any `@OnEvent` handler to enable automatic retries with configurable backoff:
-
-```typescript
-import { OnEvent, Entity, Payload, WithRetry } from 'nestflow-js/core';
-import { RetryStrategy } from 'nestflow-js/core';
-
-@OnEvent('payment.authorized')
-@WithRetry({
-  handler: 'handleAuthorized',
-  maxAttempts: 3,
-  strategy: RetryStrategy.EXPONENTIAL_JITTER,
-  initialDelay: 500,
-  backoffMultiplier: 2,
-  maxDelay: 10000,
-  jitter: true,
-})
-async handleAuthorized(@Entity() payment: Payment) {
-  const result = await this.paymentGateway.authorize(payment);
-  return { authorizationCode: result.code };
-}
-```
+See [payment processing with retry](/docs/examples/payment-with-retry) for handler examples.
 
 ### Configuration
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `handler` | `string` | **(required)** | Name of the handler method |
-| `maxAttempts` | `number` | **(required)** | Maximum number of attempts (including the initial try) |
+| `handler` | `string` | Required | Name of the handler method |
+| `maxAttempts` | `number` | Required | Positive safe integer. Counts the initial attempt. |
 | `strategy` | `RetryStrategy` | `EXPONENTIAL_JITTER` | Backoff strategy |
 | `initialDelay` | `number` | `1000` | Base delay in milliseconds |
 | `backoffMultiplier` | `number` | `2` | Multiplier applied on each attempt |
-| `maxDelay` | `number` | `60000` | Upper bound for computed delay in ms |
+| `maxDelay` | `number` | `60000` | Cap on the exponential delay before jitter, in milliseconds |
 | `jitter` | `boolean \| number` | `true` | `true` for full jitter, `0-1` for partial jitter percentage |
 
-## Backoff Strategies
+## Backoff strategies
 
 NestflowJS supports three retry strategies via the `RetryStrategy` enum:
 
 ### `RetryStrategy.FIXED`
 
-Constant delay between attempts. Use when you want predictable timing.
-
-```
-Attempt 0: 1000ms
-Attempt 1: 1000ms
-Attempt 2: 1000ms
-```
+The delay is `initialDelay` between attempts.
 
 ### `RetryStrategy.EXPONENTIAL`
 
-Delay doubles (or multiplies) on each attempt: `initialDelay * backoffMultiplier^attempt`, capped at `maxDelay`.
-
-```
-Attempt 0: 1000ms
-Attempt 1: 2000ms
-Attempt 2: 4000ms
-Attempt 3: 8000ms (capped at maxDelay)
-```
+The delay is `min(maxDelay, initialDelay * backoffMultiplier ** attempt)`. The first retry uses `attempt = 0`.
 
 ### `RetryStrategy.EXPONENTIAL_JITTER` (default)
 
-Exponential backoff with randomized jitter. This is the **AWS-recommended approach** to prevent thundering herd problems when many clients retry simultaneously.
+The adapter varies the exponential delay to spread out retries.
 
-- **Full jitter** (`jitter: true`): `random(0, min(maxDelay, initialDelay * 2^attempt))`
-- **Partial jitter** (`jitter: 0.5`): adds +/-50% randomization to the exponential delay
+- With `jitter: true`, the delay is uniformly random between zero and the capped exponential delay.
+- With `jitter: 0.5`, the delay varies by up to 50% in either direction around the capped exponential delay. The final delay can exceed `maxDelay`.
 
-## UnretriableException
+## Classify failures
 
-Some errors should never be retried: invalid input, business rule violations, not-found errors. Throw `UnretriableException` to skip retries immediately:
+An adapter starts another attempt only when `transitAttempt()` returns `{ status: 'retry' }`. It keeps the same `eventId` and increments `attempt`.
 
-```typescript
-import { UnretriableException } from 'nestflow-js/exception';
+| Outcome | What happens |
+|---------|--------------|
+| Handler throws `UnretriableException` | The orchestrator commits the configured failed state and returns `{ status: 'final', state: failedState }`. The adapter does not retry. |
+| Handler throws another error and attempts remain | The orchestrator releases the claim without advancing the state or writing a completion receipt. It returns `{ status: 'retry' }`. |
+| Handler throws another error on the last attempt | The orchestrator commits the configured failed state and an exhaustion receipt, then propagates the handler error. A later delivery of the same event reports exhaustion without rerunning the handler. |
+| Validation, a guard, storage, or post-commit processing throws | The error propagates without an adapter retry. If the failure occurs after commit, the committed transition stays in place. |
+| Another transition holds the entity's claim | The orchestrator raises `ConflictException`. NestJS maps it to HTTP `409 Conflict`. |
 
-@OnEvent('payment.authorized')
-@WithRetry({
-  handler: 'handleAuthorized',
-  maxAttempts: 3,
-  strategy: RetryStrategy.EXPONENTIAL,
-  initialDelay: 500,
-})
-async handleAuthorized(@Entity() payment: Payment, @Payload() payload: any) {
-  // Permanent failure — don't retry
-  if (payload?.cardNumber === '0000-0000-0000-0000') {
-    throw new UnretriableException('Invalid card number');
-  }
+Throw `UnretriableException` in the handler for a known permanent failure, such as a payment provider declining the payment. See the [payment example](/docs/examples/payment-with-retry) for the difference between a decline and an error eligible for a retry.
 
-  // Transient failure — will be retried
-  const result = await this.paymentGateway.authorize(payment);
-  return { authorizationCode: result.code };
-}
-```
+## Make side effects idempotent
 
-When `UnretriableException` is thrown:
-- The entity moves to the workflow's `failed` state
-- No further retry attempts are made
-- The orchestrator returns `{ status: 'final', state: failedState }`
+If the worker stops before committing, the storage lease can expire and a later delivery can run the handler again. Use `@EventId()` with the entity ID as the idempotency key for external writes. Keep guards pure. The orchestrator can evaluate them again without rerunning a committed handler.
 
-## Failed State
+Return only serializable data you can safely persist. A completion receipt stores the handler output and the entity snapshot. Do not put secrets or raw payment credentials in either.
 
-When a handler throws (and retries are exhausted), the orchestrator automatically:
+## Validate payloads
 
-1. Catches the error
-2. Updates the entity to the workflow's configured `failed` state
-3. Re-throws the error (so adapters can handle it)
-
-```typescript
-@Workflow<Payment, PaymentEvent, PaymentState>({
-  name: 'PaymentWorkflow',
-  states: {
-    finals: [PaymentState.COMPLETED, PaymentState.FAILED],
-    idles: [PaymentState.INITIATED],
-    failed: PaymentState.FAILED,  // <-- entity moves here on unhandled errors
-  },
-  // ...
-})
-```
-
-## Payload Validation
-
-Validate incoming event payloads before your handler executes. NestflowJS is schema-library agnostic — bring your own validation.
+Validate incoming event payloads before your handler executes. NestflowJS accepts your schema library. Guards can see the payload before handler validation, so handle unvalidated input in guards.
 
 ### Setup
 
@@ -148,15 +85,15 @@ import { z } from 'zod';
 export class PaymentModule {}
 ```
 
-### Usage with @Payload
+### Use `@Payload()`
 
 Pass your schema to `@Payload()`:
 
 ```typescript
 const SubmitPaymentSchema = z.object({
-  amount: z.number().positive(),
-  currency: z.string().length(3),
-  cardNumber: z.string(),
+	amount: z.number().positive(),
+	currency: z.string().length(3),
+	paymentMethodId: z.string(),
 });
 
 @OnEvent('payment.initiated')
@@ -182,7 +119,7 @@ payloadValidator: (schema, payload) => {
 },
 ```
 
-## RetryBackoff Utility
+## Calculate a backoff delay
 
 For custom retry logic outside of `@WithRetry`, use the `RetryBackoff` utility directly:
 
@@ -208,4 +145,4 @@ const nextDelay = RetryBackoff.decorrelatedJitter(previousDelay, 1000, 30000);
 - [@WithRetry decorator](/docs/api-reference/decorators#withretry)
 - [IBackoffRetryConfig interface](/docs/api-reference/interfaces#ibackoffretryconfig)
 - [Payment with Retry example](/docs/examples/payment-with-retry)
-- [Adapters](/docs/api-reference/adapters) — how adapters consume retry config
+- [Adapters API](/docs/api-reference/adapters)

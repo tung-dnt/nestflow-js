@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { IWorkflowEntity } from '@/core';
+import { InMemoryWorkflowEntity } from '../../fixtures/in-memory-workflow-entity';
 
 export enum SubscriptionState {
   TRIAL = 'trial',
@@ -28,8 +28,10 @@ export interface Subscription {
  * In-memory entity service for testing
  */
 @Injectable()
-export class SubscriptionEntityService implements IWorkflowEntity<Subscription, SubscriptionState> {
-  private subscriptions = new Map<string, Subscription>();
+export class SubscriptionEntityService extends InMemoryWorkflowEntity<Subscription, 'status'> {
+  constructor() {
+    super('status');
+  }
 
   async create(): Promise<Subscription> {
     const subscription: Subscription = {
@@ -39,34 +41,6 @@ export class SubscriptionEntityService implements IWorkflowEntity<Subscription, 
       planId: 'plan-basic',
       createdAt: new Date().toISOString(),
     };
-    this.subscriptions.set(subscription.id, subscription);
-    return subscription;
-  }
-
-  async load(urn: string | number): Promise<Subscription | null> {
-    return this.subscriptions.get(String(urn)) || null;
-  }
-
-  async update(subscription: Subscription, status: SubscriptionState): Promise<Subscription> {
-    const updated = { ...subscription, status };
-    this.subscriptions.set(subscription.id, updated);
-    return updated;
-  }
-
-  status(subscription: Subscription): SubscriptionState {
-    return subscription.status;
-  }
-
-  urn(subscription: Subscription): string | number {
-    return subscription.id;
-  }
-
-  // Test helpers
-  clear(): void {
-    this.subscriptions.clear();
-  }
-
-  getAll(): Subscription[] {
-    return Array.from(this.subscriptions.values());
+    return this.save(subscription);
   }
 }

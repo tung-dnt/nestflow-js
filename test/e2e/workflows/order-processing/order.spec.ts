@@ -124,7 +124,9 @@ describe('Order Processing Workflow E2E', () => {
       order.items = [];
       await entityService.update(order, OrderState.PENDING);
 
-      await orchestrator.transit(createWorkflowEvent(OrderEvent.CREATED, order.id, { approved: true }));
+      await expect(
+        orchestrator.transit(createWorkflowEvent(OrderEvent.CREATED, order.id, { approved: true })),
+      ).resolves.toEqual({ status: 'final', state: OrderState.FAILED });
 
       const updatedOrder = await entityService.load(order.id);
       assertEntityState(updatedOrder!, entityService, OrderState.FAILED);

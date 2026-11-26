@@ -1,111 +1,29 @@
 ---
 title: Entity Service
-description: NestflowJS does not care where you store your data. Implement five methods and any database or storage backend works.
+description: How entity services claim transitions and persist their results.
 ---
 
 
-## IWorkflowEntity Interface
+## The storage contract
 
-```typescript
-import type { IWorkflowEntity } from 'nestflow-js/core';
+The orchestrator uses [`IWorkflowEntity.claimTransition(urn, eventId)`](/docs/api-reference/interfaces#iworkflowentity) instead of separate `load()` and `update()` calls. Check for a receipt and acquire the claim atomically with respect to concurrent deliveries. A claim is exclusive per entity. A receipt deduplicates an event by entity and event ID.
 
-interface IWorkflowEntity<T = any, State = string | number> {
-  create(): Promise<T>;
-  load(urn: string | number): Promise<T | null>;
-  update(entity: T, status: State): Promise<T>;
-  status(entity: T): State;
-  urn(entity: T): string | number;
-}
-```
+- If there is a receipt for the event, return it with `kind: 'completed'`. The orchestrator uses the saved snapshot and does not run the handler again.
+- If the entity does not exist, return `kind: 'missing'`.
+- If another owner holds a live claim, return `kind: 'busy'`. The orchestrator raises `ConflictException` (HTTP 409).
+- Otherwise, acquire a lease and return `kind: 'acquired'` with the entity snapshot, `commit()`, and `release()`.
 
-| Method | Purpose | Called when |
-|--------|---------|-----------|
-| `create()` | Create a new entity in its initial state | Starting a new workflow |
-| `load(urn)` | Load an entity by its unique resource name | Every `transit()` call |
-| `update(entity, status)` | Persist the new state after a transition | After a successful handler execution |
-| `status(entity)` | Read the current state | Routing: find valid transitions |
-| `urn(entity)` | Read the entity's unique identifier | Logging, error messages |
+`commit(state, completion)` must verify the owner's token, persist the updated entity and receipt, and clear the claim in one atomic operation. After takeover, the earlier owner cannot commit. `release()` must only clear the caller's own claim.
 
-## Why an Interface, Not a Base Class
+The receipt must hold the entity snapshot as it was at commit, not a pointer to the latest entity state. Retain receipts for as long as events can be redelivered. Persist only serializable entity snapshots and handler output that are safe to store.
 
-Composition over inheritance. Your entity service can use any persistence layer — TypeORM, Prisma, DynamoDB, in-memory `Map`, or a REST API. The workflow engine only calls these five methods.
+Coordinate any other writers of workflow state with the same claim. A separate `load()` followed by an unconditional `update()` cannot protect against concurrent writes.
 
-## Example: In-Memory (Testing)
+## Recovery after a crash
 
-```typescript
-import { Injectable } from '@nestjs/common';
-import type { IWorkflowEntity } from 'nestflow-js/core';
+If the process crashes before commit, a later delivery can acquire the expired lease and run the handler again. An atomic commit does not guarantee exactly-once side effects. Use [`@EventId()`](/docs/api-reference/decorators#eventid) and the entity ID as a downstream idempotency key.
 
-@Injectable()
-export class OrderEntityService implements IWorkflowEntity<Order, OrderStatus> {
-  private store = new Map<string, Order>();
-
-  async create(): Promise<Order> {
-    const order: Order = {
-      id: crypto.randomUUID(),
-      status: OrderStatus.Pending,
-    };
-    this.store.set(order.id, order);
-    return order;
-  }
-
-  async load(urn: string): Promise<Order | null> {
-    return this.store.get(urn) || null;
-  }
-
-  async update(order: Order, status: OrderStatus): Promise<Order> {
-    order.status = status;
-    this.store.set(order.id, order);
-    return order;
-  }
-
-  status(order: Order): OrderStatus {
-    return order.status;
-  }
-
-  urn(order: Order): string {
-    return order.id;
-  }
-}
-```
-
-## Example: Database (Prisma)
-
-```typescript
-import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import type { IWorkflowEntity } from 'nestflow-js/core';
-
-@Injectable()
-export class OrderEntityService implements IWorkflowEntity<Order, OrderStatus> {
-  constructor(private prisma: PrismaService) {}
-
-  async create(): Promise<Order> {
-    return this.prisma.order.create({
-      data: { status: OrderStatus.Pending },
-    });
-  }
-
-  async load(urn: string): Promise<Order | null> {
-    return this.prisma.order.findUnique({ where: { id: urn } });
-  }
-
-  async update(order: Order, status: OrderStatus): Promise<Order> {
-    return this.prisma.order.update({
-      where: { id: order.id },
-      data: { status },
-    });
-  }
-
-  status(order: Order): OrderStatus {
-    return order.status;
-  }
-
-  urn(order: Order): string {
-    return order.id;
-  }
-}
-```
+See the [DynamoDB entity service](https://github.com/tung-dnt/nestflow-js/blob/main/examples/lambda-order-state-machine/src/order/order-entity.service.ts) for a storage-backed implementation.
 
 ## Registration
 
