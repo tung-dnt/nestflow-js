@@ -3,6 +3,7 @@
 - Require a stable `eventId` and a storage-backed `claimTransition` implementation.
 - Retry only transient handler errors and persist terminal failure only after the last attempt.
 - Keep execution identity local to each run. Enforce global guards, support numeric state `0`, validate handlers at startup, and omit raw payloads from transition logs.
+- Require NestJS 12 and Node.js 22.12 or later.
 
 ## v0.1.15
 

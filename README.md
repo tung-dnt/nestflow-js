@@ -17,15 +17,17 @@ Define business state and transitions. Keep your entities in a storage backend t
 
 ## Installation
 
+This version requires NestJS 12 and Node.js 22.12 or later. See the [NestJS 12 migration guide](https://docs.nestjs.com/migration-guide).
+
 ```bash
 # Using bun
-bun add nestflow-js @nestjs/common @nestjs/core reflect-metadata rxjs
+bun add nestflow-js @nestjs/common@12 @nestjs/core@12 reflect-metadata rxjs
 
 # Using npm
-npm install nestflow-js @nestjs/common @nestjs/core reflect-metadata rxjs
+npm install nestflow-js @nestjs/common@12 @nestjs/core@12 reflect-metadata rxjs
 
 # Using yarn
-yarn add nestflow-js @nestjs/common @nestjs/core reflect-metadata rxjs
+yarn add nestflow-js @nestjs/common@12 @nestjs/core@12 reflect-metadata rxjs
 ```
 
 ## Quick Start
