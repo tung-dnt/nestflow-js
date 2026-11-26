@@ -1,6 +1,6 @@
 ---
 title: Adapters
-description: Transit results, adapter hooks, and the Durable Lambda event contract.
+description: Execution, transport, and recovery contracts for Node services, message workers, and durable Lambda functions.
 ---
 
 
@@ -28,6 +28,24 @@ type TransitResult =
 | `no_transition` | No unambiguous auto-transition from the current state. | Wait for an explicit event from an external system. |
 
 Use the [`IWorkflowEvent`](/docs/api-reference/interfaces#iworkflowevent) envelope for each new event. Supply the same event ID on retries and redelivery.
+
+## Node and message workers
+
+Import these functions from `nestflow-js/adapter`. They use the same registered Nest `OrchestratorService` as the Lambda adapter.
+
+- `runInProcess(orchestrator, event)` follows automatic continuations. It returns when the result is `final`, `idle`, or `no_transition`. To resume a paused workflow, submit a new event for the same entity.
+- `processWorkflowMessage(orchestrator, raw)` validates the decoded workflow envelope and executes one logical transition, including configured handler retries. It returns the result without publishing or acknowledging a message.
+- `recoverNextTransition(orchestrator, store, deliver)` claims a pending committed transition and derives its result without calling the original handler. It acknowledges the claim only after `deliver(result)` resolves. It returns `false` when the store offers no work.
+
+Each broker factory accepts `consume`, an async function that processes a decoded event. Pass `raw => processWorkflowMessage(orchestrator, raw)` when the entity store commits pending work in the transition transaction. A separate dispatcher publishes automatic continuations. The factory does not open connections or start a polling process.
+
+| Factory and options | Inbound delivery | Outbound delivery |
+| --- | --- | --- |
+| `createRabbitMQAdapter({ channel, queue, consume })` | `consumeOne()` reads at most one message from the queue. It returns `false` when the queue is empty. | `publish(event)` uses an application-owned confirm channel and rejects an unroutable mandatory publish. |
+| `createAzureServiceBusAdapter({ sender, connection, queueName, consume })` | Register `trigger` with `app.serviceBusQueue(name, trigger)`. `connection` is the **setting name**, not its secret value. | `publish(event)` awaits `sender.sendMessages`. |
+| `createGcpPubSubAdapter({ topic, subscription, consume })` | Pass an authenticated, decoded push envelope to `consumePush`. Send its returned HTTP status. Return a non-success response for thrown errors. | `publish(event)` awaits the topic's `publishMessage`. |
+
+The [deployment guide](/docs/deployment-architecture) covers message settlement, retry clocks, and storage requirements.
 
 ## BaseWorkflowAdapter
 

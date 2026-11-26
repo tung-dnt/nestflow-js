@@ -1,0 +1,46 @@
+---
+title: Choose a deployment architecture
+description: Decide where each transition runs, who stores workflow state, and what happens if a worker stops before the next event is delivered.
+---
+
+Keep the `@Workflow` definition and event handlers independent of the host. Choose an adapter from `nestflow-js/adapter` based on what must survive a process restart.
+
+| Deployment | Adapter | Who drives the next transition? |
+| --- | --- | --- |
+| Single Node service | `runInProcess` | The current process follows automatic transitions. The caller resumes a paused workflow. |
+| Server or container with RabbitMQ | `createRabbitMQAdapter` | A worker consumes one event. A separate dispatcher publishes the next event. |
+| AWS Durable Lambda | `DurableLambdaEventHandler` | AWS checkpoints attempts and waits for callbacks. |
+| Azure Functions with Service Bus | `createAzureServiceBusAdapter` | A queue-triggered function processes an event. A timer-triggered function dispatches pending work. |
+| Google Cloud Run with Pub/Sub | `createGcpPubSubAdapter` | Pub/Sub pushes an event to a private service. A scheduled request dispatches pending work. |
+
+## Single Node service
+
+Use the in-process runner for a local tool, a test service, or work you can afford to lose. Register `InMemoryWorkflowEntity` through your entity service. Call `runInProcess` with a stable event ID. It follows `continued` results and returns on `idle`, `no_transition`, or `final`. To resume after a pause, submit the external event for the same `urn` with a new event ID. Do not keep an HTTP request open while waiting for a person.
+
+**An in-memory store is private to one process.** Restarting it discards entities, active claims, and receipts. A second replica cannot resume the first replica's workflow or recognize its duplicate deliveries. Sticky sessions do not protect against a crash. A database can preserve entities, but it cannot restart an interrupted in-process loop on its own.
+
+## Server or container with a message broker
+
+Choose a broker when several replicas must process work or new workers must finish work left by a stopped worker. In the [broker example](https://github.com/tung-dnt/nestflow-js/tree/main/examples/broker-workflow), PostgreSQL owns the entity and RabbitMQ carries events. One message triggers one logical transition, not the whole workflow.
+
+1. The worker obtains the entity's [transition claim](/docs/concepts/entity-service) before running the handler. On success, the store commits the new state, event receipt, and pending handoff in the same transaction.
+2. The worker acknowledges the inbound message after processing succeeds. If it dies before acknowledging, redelivery uses the **original workflow event ID** to find the receipt.
+3. The dispatcher calls `recoverNextTransition` and publishes `result.nextEvent` only for `continued`. It acknowledges the pending handoff after the broker confirms publication. If the dispatcher dies between publish and acknowledgement, the duplicate carries the same event ID. The dispatcher must run even if no new messages arrive.
+
+The pending handoff is a **transactional outbox**. Without it, a worker can commit the new state, die before publishing the continuation, and strand the workflow. Preserve receipts for at least the redelivery and replay window. Use the entity ID and event ID as an idempotency key for external effects. A payment call can succeed even if the worker dies before committing its receipt.
+
+`idle` and `no_transition` require a new external event. The broker adapters do not schedule a timeout from the result's `timeout` field. If a deadline changes business state, persist the deadline and arrange delivery of an explicit timeout event. Configure bounded broker redelivery and a dead-letter destination for invalid or exhausted messages. Keep handler attempts and their backoff within the host's execution and message-lock limits.
+
+## AWS serverless
+
+Choose [Durable Lambda](/docs/plugins/durable-lambda) when you need managed checkpoints, durable retry delays, or callback waits. Pass `withDurableExecution` into `DurableLambdaEventHandler`. AWS owns execution history. Your entity service still owns transition claims and receipts. Do not also dispatch the same workflow's continuations from an outbox worker. See the [Lambda order example](/docs/examples/lambda-order-state-machine).
+
+## Azure serverless
+
+Use the [Service Bus trigger](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-service-bus-trigger) when a Function should handle one queue message and exit. The example shares the same workflow and PostgreSQL store with the container worker. The timer trigger keeps pending handoffs moving when the queue is empty. Size the database connection pool for the maximum number of function instances. This adapter does not use Azure Durable Functions or provide its execution history.
+
+## Google Cloud serverless
+
+Use an [authenticated Pub/Sub push subscription](https://cloud.google.com/pubsub/docs/authenticate-push-subscriptions) with Cloud Run. A successful HTTP response acknowledges the push. Return it only after processing succeeds. Grant the push identity permission to invoke the service and grant the service identity permission to publish continuations. Use an authenticated Cloud Scheduler request for outbox dispatch. Do not depend on a background loop in a service that can scale to zero. This adapter does not use Google Cloud Workflows.
+
+See the [adapter contracts](/docs/api-reference/adapters) for result handling and [the broker example](https://github.com/tung-dnt/nestflow-js/tree/main/examples/broker-workflow) for the host entry points.

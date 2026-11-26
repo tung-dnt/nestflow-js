@@ -3,7 +3,7 @@ title: Custom Adapter
 description: Build your own adapter by extending BaseWorkflowAdapter to run workflows on any computing service.
 ---
 
-Extend `BaseWorkflowAdapter` to drive workflows on a queue, an HTTP endpoint, or another runtime. Its loop calls `executeTransit` and dispatches each [TransitResult](/docs/api-reference/adapters#transitresult) to your adapter.
+Start with the [built-in runtime adapters](/docs/deployment-architecture). For a runtime with its own checkpoints or callback waits, extend `BaseWorkflowAdapter`. Its loop calls `executeTransit` and dispatches each [TransitResult](/docs/api-reference/adapters#transitresult) to your adapter.
 
 ## Implement the adapter hooks
 
@@ -23,51 +23,15 @@ Require an `eventId` at your entry point. Use a producer's stable message ID or 
 
 Call `orchestrator.transit(event)` if you do not need retries. It runs one attempt, even for handlers decorated with `@WithRetry`.
 
-To honor `@WithRetry`, implement `executeTransit` like this in a Node.js adapter:
+For a custom Node transport, call `processWorkflowMessage(orchestrator, decodedMessage)` from `nestflow-js/adapter`. It validates the envelope and honors `@WithRetry` for one logical transition. It does not acknowledge the delivery or publish the next event.
 
-```typescript
-import { setTimeout as sleep } from 'node:timers/promises';
-import { RetryBackoff } from 'nestflow-js/core';
-import type { IWorkflowEvent, TransitResult } from 'nestflow-js/core';
-
-// Method in your BaseWorkflowAdapter subclass.
-protected async executeTransit(event: IWorkflowEvent): Promise<TransitResult> {
-	const config = this.orchestrator.getRetryConfig(event.event);
-	if (!config) return this.orchestrator.transit(event);
-
-	let attempt = 0;
-	for (; attempt + 1 < config.maxAttempts; attempt++) {
-		const result = await this.orchestrator.transitAttempt({ ...event, attempt }, true);
-		if (result.status !== 'retry') return result;
-		await sleep(RetryBackoff.calculateDelay(attempt, config));
-	}
-
-	return this.orchestrator.transitAttempt({ ...event, attempt }, false);
-}
-```
+If the runtime owns checkpointing and backoff, implement `executeTransit` with `orchestrator.transitAttempt(event, canRetry)`. Schedule a new attempt only for a `retry` result. Keep `eventId` unchanged and increment `attempt`. See the [Durable Lambda adapter](/docs/plugins/durable-lambda) for checkpointed attempts.
 
 The last attempt passes `false` so a handler failure commits the configured failed state and its exhaustion receipt before the error propagates. Do not catch and retry thrown errors. Validation, guard, claim, storage, and post-commit errors are not handler retry signals. For HTTP, preserve the `409 Conflict` response when another transition holds the entity's claim.
 
-## Run without an adapter
+## Run in the current process
 
-Call `transit()` once per event. The loop below follows automatic transitions and returns as soon as the workflow finishes or needs input.
-
-```typescript
-import type { IWorkflowEvent, OrchestratorService, TransitResult } from 'nestflow-js/core';
-
-async function runUntilPause(
-	orchestrator: OrchestratorService,
-	initialEvent: IWorkflowEvent,
-): Promise<TransitResult> {
-	let event = initialEvent;
-
-	while (true) {
-		const result = await orchestrator.transit(event);
-		if (result.status !== 'continued') return result;
-		event = result.nextEvent;
-	}
-}
-```
+Use `runInProcess(orchestrator, initialEvent)` from `nestflow-js/adapter` when no host-specific hooks are needed. It follows automatic transitions and returns as soon as the workflow finishes or needs input. See the [Node quick start](/docs/quick-start) for a complete example.
 
 ## Related
 

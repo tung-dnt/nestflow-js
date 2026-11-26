@@ -2,9 +2,11 @@ packages:
   - docs
   - packages/validator/*
   - examples/lambda-order-state-machine
+  - examples/broker-workflow
 
 allowBuilds:
   esbuild: true
+  protobufjs: false
   sharp: false
 
 minimumReleaseAgeExclude:

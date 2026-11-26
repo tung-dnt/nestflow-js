@@ -31,7 +31,7 @@ Be honest about the boundaries:
 - **NestJS-native** — decorators, modules, dependency injection. Workflows integrate with your existing NestJS app, not fight it. ([Workflow definition](/docs/concepts/workflow-definition))
 - **Declarative state machines** — define states, transitions, and conditions in a single `@Workflow` decorator. The engine enforces valid transitions at runtime. ([States & transitions](/docs/concepts/states-and-transitions))
 - **Auto-continuation.** The orchestrator returns the next event for non-idle states with one matching transition. The adapter submits that event. ([TransitResult](/docs/api-reference/adapters#transitresult))
-- **Adapter pattern** — same workflow definition runs in HTTP controllers, Lambda handlers, or durable functions. Switch runtimes without rewriting business logic. ([Adapters](/docs/api-reference/adapters))
+- **Runtime adapters.** Use the same workflow in a Node service, a broker worker, or a durable Lambda function. [Choose a deployment architecture](/docs/deployment-architecture) based on what must survive a restart.
 - **Built-in retry** — `@WithRetry` with exponential backoff, jitter, and configurable strategies. `UnretriableException` for permanent failures. ([Retry guide](/docs/recipes/retry-and-error-handling))
 - **Schema-agnostic validation** — `@Payload(schema)` with a pluggable `PayloadValidator`. Use Zod, Joi, class-validator, or anything else. ([Decorators](/docs/api-reference/decorators))
 - **No direct runtime dependencies.** Install the peer dependencies listed in the [quick start](/docs/quick-start#installation). Use subpath exports such as `nestflow-js/core` and `nestflow-js/adapter` to import what you need.

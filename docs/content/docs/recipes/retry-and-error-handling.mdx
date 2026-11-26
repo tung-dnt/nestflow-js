@@ -70,15 +70,14 @@ Provide a `payloadValidator` function when registering the module:
 
 ```typescript
 import { WorkflowModule } from 'nestflow-js/core';
-import { z } from 'zod';
+import { zodPayloadValidator } from '@nestflow-js/validator-zod';
 
 @Module({
   imports: [
     WorkflowModule.register({
       entities: [{ provide: 'entity.payment', useClass: PaymentEntityService }],
       workflows: [PaymentWorkflow],
-      // Zod example
-      payloadValidator: (schema, payload) => (schema as z.ZodSchema).parse(payload),
+      payloadValidator: zodPayloadValidator,
     }),
   ],
 })
@@ -90,6 +89,8 @@ export class PaymentModule {}
 Pass your schema to `@Payload()`:
 
 ```typescript
+import { z } from 'zod';
+
 const SubmitPaymentSchema = z.object({
 	amount: z.number().positive(),
 	currency: z.string().length(3),
@@ -108,16 +109,7 @@ async handleInitiated(
 
 If validation fails, the framework throws a `BadRequestException` wrapping the validation error.
 
-### Alternative: Joi
-
-```typescript
-// In module registration
-payloadValidator: (schema, payload) => {
-  const { value, error } = (schema as Joi.Schema).validate(payload);
-  if (error) throw error;
-  return value;
-},
-```
+For Valibot, ArkType, or Joi, register the [matching validator plugin](/docs/api-reference/interfaces#payloadvalidator) and pass its schema to `@Payload(schema)`.
 
 ## Calculate a backoff delay
 
