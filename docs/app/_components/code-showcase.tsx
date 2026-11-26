@@ -12,15 +12,12 @@ const definitionTabs = [
 @Workflow({
   name: 'OrderWorkflow',
   states: {
-    finals: ['delivered', 'cancelled'],
+    finals: ['paid', 'cancelled'],
     idles: ['pending_payment'],
     failed: 'cancelled',
   },
   transitions: [
-    { event: 'PAYMENT_RECEIVED', from: ['pending_payment'], to: 'processing' },
-    { event: 'SHIP_ORDER', from: ['processing'], to: 'shipped' },
-    { event: 'CONFIRM_DELIVERY', from: ['shipped'], to: 'delivered' },
-    { event: 'CANCEL', from: ['pending_payment', 'processing'], to: 'cancelled' },
+    { event: 'PAYMENT_RECEIVED', from: ['pending_payment'], to: 'paid' },
   ],
   entityService: 'entity.order',
 })
@@ -35,28 +32,16 @@ export class OrderWorkflow {
   {
     label: 'Entity Service',
     lang: 'ts',
-    code: `import { Injectable } from '@nestjs/common';
-import { IWorkflowEntity } from 'nestflow-js/core';
+    code: `import type { IWorkflowEntity, TransitionClaim } from 'nestflow-js/core';
 
-@Injectable()
-export class OrderEntityService
-  implements IWorkflowEntity<Order, OrderState> {
+// The storage adapter claims the order before the handler runs.
+interface OrderEntityService extends IWorkflowEntity<Order, OrderState> {
+  claimTransition(
+    urn: string | number,
+    eventId: string,
+  ): Promise<TransitionClaim<Order, OrderState>>;
 
-  async create() {
-    return { id: uuid(), status: 'pending_payment' };
-  }
-
-  async load(urn: string) {
-    return this.repo.findOne(urn);
-  }
-
-  async update(order: Order, status: OrderState) {
-    order.status = status;
-    return this.repo.save(order);
-  }
-
-  status(order: Order) { return order.status; }
-  urn(order: Order) { return order.id; }
+  // The claim's commit persists the state and event receipt atomically.
 }`,
   },
 ];
@@ -71,10 +56,11 @@ const usageTabs = [
 export class OrderService {
   constructor(private orchestrator: OrchestratorService) {}
 
-  async processPayment(orderId: string, payload: PaymentDto) {
+  async processPayment(orderId: string, eventId: string, payload: PaymentDto) {
     const result = await this.orchestrator.transit({
       event: 'PAYMENT_RECEIVED',
       urn: orderId,
+      eventId,
       payload,
       attempt: 0,
     });

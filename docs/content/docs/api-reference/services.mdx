@@ -18,42 +18,46 @@ import { OrchestratorService } from 'nestflow-js/core';
 
 #### `transit(event)`
 
-Processes a workflow event and executes the appropriate state transition.
+Processes one attempt of a workflow event. Does not schedule handler retries, even if the handler has `@WithRetry`.
 
 ##### Signature
 
 ```typescript
-async transit(params: IWorkflowEvent): Promise<TransitResult>
+transit(params: IWorkflowEvent): Promise<TransitResult>
 ```
 
-##### Parameters
+Takes an [`IWorkflowEvent`](/docs/api-reference/interfaces#iworkflowevent) with a stable `eventId`. Returns a [`TransitResult`](/docs/api-reference/adapters#transitresult) on success.
 
-- `params`: Workflow event object:
-  - `event`: Event name that triggers a transition
-  - `urn`: Unique resource name (entity identifier)
-  - `payload?`: Optional event payload
-  - `attempt`: Retry attempt number
+#### `transitAttempt`
 
-##### Returns
-
-Promise resolving to a `TransitResult` indicating the workflow outcome (`final`, `idle`, `continued`, or `no_transition`). See [TransitResult](/docs/api-reference/adapters#transitresult) for details.
-
-##### Example
+Executes one attempt for an adapter. Use `canRetry: true` only when another handler attempt remains.
 
 ```typescript
-@Injectable()
-export class OrderService {
-  constructor(private orchestrator: OrchestratorService) {}
+transitAttempt(params: IWorkflowEvent, canRetry: false): Promise<TransitResult>;
+transitAttempt(
+	params: IWorkflowEvent,
+	canRetry: boolean,
+): Promise<TransitResult | { status: 'retry' }>;
+```
 
-  async processOrderEvent(orderId: string, event: string, data: any) {
-    await this.orchestrator.transit({
-      event: event,
-      urn: orderId,
-      payload: data,
-      attempt: 0,
-    });
-  }
-}
+| Outcome | Behavior |
+|---------|----------|
+| Event already committed | Uses the stored receipt instead of running the handler. An `exhausted` receipt raises an exhaustion error. |
+| Retryable handler error and `canRetry` is `true` | Releases the claim and returns `{ status: 'retry' }`. The adapter can schedule another attempt with the same ID. |
+| Retryable handler error and `canRetry` is `false` | Commits the failure state with an `exhausted` receipt and throws the handler error. Redelivery of that event reports exhaustion without running the handler. |
+| `UnretriableException` from the handler | Commits the failure state with an `unretriable` receipt and returns `{ status: 'final', state }`. |
+
+A busy claim raises `ConflictException` (HTTP 409). A missing entity, invalid event ID, unknown event, or invalid transition raises `BadRequestException`. If guards rule out an otherwise matching transition in an idle state, the attempt returns `idle` instead. Validation, guard, storage, and post-commit errors propagate without requesting a retry.
+
+To process a single event directly:
+
+```typescript
+const result = await orchestrator.transit({
+	event: 'order.submit',
+	urn: orderId,
+	eventId: commandId,
+	attempt: 0,
+});
 ```
 
 #### `getRetryConfig(event)`
@@ -74,22 +78,7 @@ getRetryConfig(event: string): IBackoffRetryConfig | undefined
 
 The `IBackoffRetryConfig` if the handler has `@WithRetry`, otherwise `undefined`.
 
-##### Behavior
-
-1. Loads the entity using the URN
-2. Finds the appropriate transition based on current state and event
-3. Validates transition conditions
-4. Executes the event handler
-5. Updates entity state
-6. Handles retries if configured
-7. Processes automatic transitions if applicable
-
-##### Error Handling
-
-- Throws `BadRequestException` if no workflow is found for the event
-- Throws `BadRequestException` if no valid transition is found
-- Updates entity to failed state on error
-- Respects `UnretriableException` to prevent retries
+The configuration describes the attempt limit and backoff. It does not change `transit()` behavior.
 
 ### Lifecycle
 
@@ -112,19 +101,18 @@ import { StateRouterHelperFactory } from 'nestflow-js/core';
 
 ### Methods
 
-#### `create(event, entityService, definition, logger)`
+#### `create(event, entityService, workflowDefinition)`
 
 Creates a new router helper instance.
 
 ##### Signature
 
 ```typescript
-create(
-  event: string,
-  entityService: IWorkflowEntity,
-  definition: IWorkflowDefinition,
-  logger: Logger
-): StateRouterHelper
+create<T, Event, State>(
+	event: Event,
+	entityService: IWorkflowEntity,
+	workflowDefinition: IWorkflowDefinition<T, Event, State>,
+): RouterService<T, Event, State>
 ```
 
 ## RouterService
@@ -134,40 +122,6 @@ Service responsible for routing workflow events to appropriate handlers.
 ### Note
 
 This service is used internally by `OrchestratorService` and typically doesn't need to be used directly.
-
-## Usage Example
-
-```typescript
-import { Module, Injectable } from '@nestjs/common';
-import { WorkflowModule, OrchestratorService } from 'nestflow-js/core';
-import type { IWorkflowEvent } from 'nestflow-js/core';
-
-@Injectable()
-export class WorkflowProcessor {
-  constructor(private orchestrator: OrchestratorService) {}
-
-  async processEvent(event: IWorkflowEvent) {
-    try {
-      await this.orchestrator.transit(event);
-      console.log('Event processed successfully');
-    } catch (error) {
-      console.error('Failed to process event:', error);
-      throw error;
-    }
-  }
-}
-
-@Module({
-  imports: [
-    WorkflowModule.register({
-      entities: [],
-      workflows: [],
-    }),
-  ],
-  providers: [WorkflowProcessor],
-})
-export class AppModule {}
-```
 
 ## Related
 

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { IWorkflowEntity } from '@/core';
+import { InMemoryWorkflowEntity } from '../../fixtures/in-memory-workflow-entity';
 
 export enum OnboardingState {
   REGISTRATION = 'registration',
@@ -30,8 +30,10 @@ export interface User {
  * In-memory entity service for testing
  */
 @Injectable()
-export class UserEntityService implements IWorkflowEntity<User, OnboardingState> {
-  private users = new Map<string, User>();
+export class UserEntityService extends InMemoryWorkflowEntity<User, 'status'> {
+  constructor() {
+    super('status');
+  }
 
   async create(): Promise<User> {
     const user: User = {
@@ -42,34 +44,6 @@ export class UserEntityService implements IWorkflowEntity<User, OnboardingState>
       profileComplete: false,
       registeredAt: new Date().toISOString(),
     };
-    this.users.set(user.id, user);
-    return user;
-  }
-
-  async load(urn: string | number): Promise<User | null> {
-    return this.users.get(String(urn)) || null;
-  }
-
-  async update(user: User, status: OnboardingState): Promise<User> {
-    const updated = { ...user, status };
-    this.users.set(user.id, updated);
-    return updated;
-  }
-
-  status(user: User): OnboardingState {
-    return user.status;
-  }
-
-  urn(user: User): string | number {
-    return user.id;
-  }
-
-  // Test helpers
-  clear(): void {
-    this.users.clear();
-  }
-
-  getAll(): User[] {
-    return Array.from(this.users.values());
+    return this.save(user);
   }
 }

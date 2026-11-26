@@ -1,4 +1,4 @@
-import { BadRequestException, type Logger } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
 import type { Duration, ITransitionEvent, IWorkflowDefinition, IWorkflowEntity, PayloadValidator } from '../types';
 
 /**
@@ -16,29 +16,10 @@ import type { Duration, ITransitionEvent, IWorkflowDefinition, IWorkflowEntity, 
 export class RouterService<T, Event, State> {
   constructor(
     private readonly event: Event,
-    private readonly entityService: IWorkflowEntity,
+    private readonly entityService: Pick<IWorkflowEntity, 'status'>,
     private readonly workflowDefinition: IWorkflowDefinition<T, Event, State>,
-    private readonly logger: Logger,
     private readonly payloadValidator: PayloadValidator | null,
   ) {}
-
-  /** Load the entity by URN and verify it exists. Warns if already in a final state. */
-  async loadAndValidateEntity(urn: string | number): Promise<T> {
-    const entity = await this.entityService.load(urn);
-    if (!entity) {
-      this.logger.error(`Element not found`, urn);
-      throw new BadRequestException(`Entity not found`, String(urn));
-    }
-
-    const entityStatus = this.entityService.status(entity);
-    const definedFinalStates = this.workflowDefinition.states.finals as Array<string | number>;
-
-    if (definedFinalStates.includes(entityStatus)) {
-      this.logger.warn(`Entity: ${urn} is in a final status. Accepting transitions due to a retry mechanism.`, urn);
-    }
-
-    return entity;
-  }
 
   /**
    * Search the workflow's transitions for a valid match given the entity's
@@ -58,12 +39,15 @@ export class RouterService<T, Event, State> {
 
     let firstMatch: ITransitionEvent<T, Event, State, P> | null = null;
     let hasEventStateMatch = false;
+    let globalConditionsMet: boolean | undefined;
 
     for (const t of this.workflowDefinition.transitions) {
       if (!this.matchesState(t.from, currentStatus)) continue;
       if (!skipEventCheck && !this.matchesEvent(t.event)) continue;
 
       hasEventStateMatch = true;
+      globalConditionsMet ??= !this.workflowDefinition.conditions?.some((condition) => !condition(entity, payload));
+      if (!globalConditionsMet) return { transition: null, hasEventStateMatch };
 
       if (t.conditions?.some((c) => !c(entity, payload))) continue;
 
@@ -93,7 +77,7 @@ export class RouterService<T, Event, State> {
   /** Check whether the entity's current state is listed as an idle state. */
   isInIdleStatus(entity: T): boolean {
     const status = this.entityService.status(entity);
-    if (!status) {
+    if (status === undefined || status === null) {
       throw new Error('Entity status is not defined. Unable to determine if the entity is idle or not.');
     }
     return this.workflowDefinition.states.idles.some((entry) =>
@@ -114,22 +98,23 @@ export class RouterService<T, Event, State> {
   }
 
   /**
-   * Resolve `@Entity()` and `@Payload()` parameter decorators into an ordered
+   * Resolve `@Entity()`, `@Payload()`, and `@EventId()` parameter decorators into an ordered
    * argument array for the handler method. Falls back to the legacy
    * `{ entity, payload }` shape when no decorator metadata is present.
    */
-  buildParamDecorators(entity: T, payload: any, target: any, propertyKey: string | symbol) {
+  buildParamDecorators(entity: T, payload: unknown, target: object, propertyKey: string | symbol, eventId: string) {
     // Metadata is stored on the prototype when decorators are applied
     const prototype = target.constructor?.prototype || target;
-    const paramsMeta: Array<{ index: number; type: string; dto?: any }> =
+    const paramsMeta: Array<{ index: number; type: string; dto?: unknown }> =
       Reflect.getOwnMetadata('workflow:params', prototype, propertyKey) || [];
 
-    let args: any[] = [];
+    let args: unknown[] = [];
     if (paramsMeta && paramsMeta.length > 0) {
       // populate args according to metadata indices
       for (const meta of paramsMeta) {
         if (meta.type === 'entity') args[meta.index] = entity;
         else if (meta.type === 'payload') args[meta.index] = this.validatePayload(meta.dto, payload);
+        else if (meta.type === 'eventId') args[meta.index] = eventId;
         else args[meta.index] = undefined;
       }
     } else {

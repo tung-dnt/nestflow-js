@@ -1,17 +1,17 @@
 ---
 title: Adapters
-description: Adapters bridge your infrastructure and the orchestration engine. They call OrchestratorService.transit() in a loop and react to each result.
+description: Transit results, adapter hooks, and the Durable Lambda event contract.
 ---
 
 
 ## TransitResult
 
-Every call to `orchestrator.transit()` returns a `TransitResult` — a discriminated union that tells the caller what happened and what to do next.
+On success, `orchestrator.transit()` returns a `TransitResult`. It runs one attempt and does not schedule retries.
 
 ### Type Definition
 
 ```typescript
-import type { TransitResult, IWorkflowEvent } from 'nestflow-js/core';
+import type { Duration, IWorkflowEvent } from 'nestflow-js/core';
 
 type TransitResult =
   | { status: 'final'; state: string | number }
@@ -22,122 +22,49 @@ type TransitResult =
 
 | Status | Meaning | What to do |
 |--------|---------|-----------|
-| `final` | Entity reached a terminal state. Workflow is complete. | Return the result — nothing more to do. |
+| `final` | The entity reached a terminal state, or the handler threw `UnretriableException` and committed the failure state. | End the workflow. |
 | `idle` | Entity is in an idle state, waiting for external input. | Wait for a callback or poll a queue. Optional `timeout` hints how long. |
-| `continued` | A follow-up transition was found automatically. | Feed `nextEvent` back into `transit()` to continue processing. |
+| `continued` | The orchestrator found an automatic continuation. | Pass `nextEvent` through unchanged, including its `eventId`. |
 | `no_transition` | No unambiguous auto-transition from the current state. | Wait for an explicit event from an external system. |
 
-### IWorkflowEvent
-
-The event envelope consumed by `orchestrator.transit()`:
-
-```typescript
-interface IWorkflowEvent<T = any> {
-  event: string;           // Event name that triggers a transition
-  urn: string | number;    // Unique identifier for the entity
-  payload?: T | object | string; // Optional event data
-  attempt: number;         // Retry attempt number (starts at 0)
-}
-```
-
-### Usage Example
-
-```typescript
-import { OrchestratorService } from 'nestflow-js/core';
-import type { TransitResult, IWorkflowEvent } from 'nestflow-js/core';
-
-@Injectable()
-export class MyService {
-  constructor(private orchestrator: OrchestratorService) {}
-
-  async processEvent(event: IWorkflowEvent) {
-    const result: TransitResult = await this.orchestrator.transit(event);
-
-    switch (result.status) {
-      case 'final':
-        console.log('Completed in state:', result.state);
-        break;
-      case 'idle':
-        console.log('Idle at state:', result.state);
-        break;
-      case 'continued':
-        // Feed it back to continue the workflow
-        await this.processEvent(result.nextEvent);
-        break;
-      case 'no_transition':
-        console.log('Waiting at state:', result.state);
-        break;
-    }
-  }
-}
-```
+Use the [`IWorkflowEvent`](/docs/api-reference/interfaces#iworkflowevent) envelope for each new event. Supply the same event ID on retries and redelivery.
 
 ## BaseWorkflowAdapter
 
-The abstract class that encapsulates the orchestration loop. It calls `transit()` and dispatches each `TransitResult` variant to a dedicated handler method:
+`runWorkflowLoop(initialEvent, ctx)` invokes `executeTransit()` and dispatches the result. A subclass implements these hooks:
+
+| Hook | Returns |
+|------|---------|
+| `executeTransit(event, iteration, ctx)` | `Promise<TransitResult>` |
+| `onFinal(result, event, ctx)` | The adapter's final `TResult` |
+| `onIdle(result, event, iteration, ctx)` | `Promise<IWorkflowEvent>` after an external event arrives |
+| `onContinued(result, iteration, ctx)` | `Promise<IWorkflowEvent>` with the supplied `nextEvent` |
+| `onNoTransition(result, event, iteration, ctx)` | `Promise<IWorkflowEvent>` after an explicit event arrives |
+
+`ctx` is the adapter's `TContext`. `iteration` starts at zero and advances after each loop result, not after each handler retry. Each hook that takes `result` receives the corresponding `TransitResult` variant.
+
+## Retries and delivery errors
+
+An adapter can call [`transitAttempt(event, canRetry)`](/docs/api-reference/services#transitattempt) to support `@WithRetry`. Pass `true` only when another attempt remains. Retry only on `{ status: 'retry' }`. Keep the same `eventId` and increment `attempt`. Validation, guard, storage, and post-commit errors propagate instead of requesting a retry.
+
+The orchestrator raises `ConflictException` (HTTP 409) when the entity has a live claim and the event has no receipt. A delivery system can requeue the original event with backoff. A custom HTTP adapter must validate its input before passing it to the orchestrator. A queue adapter must preserve the producer's logical event ID across redeliveries.
+
+## DurableWorkflowEvent
 
 ```typescript
-import { BaseWorkflowAdapter } from 'nestflow-js/adapter';
-
-// TContext = your runtime context (e.g. IDurableContext, Express Request)
-// TResult  = the value your adapter returns when the workflow completes
-abstract class BaseWorkflowAdapter<TContext, TResult> {
-  protected runWorkflowLoop(initialEvent, ctx): Promise<TResult>;
-
-  // Override these in your concrete adapter:
-  protected abstract executeTransit(event, iteration, ctx): Promise<TransitResult>;
-  protected abstract onFinal(result, event, ctx): TResult;
-  protected abstract onIdle(result, event, iteration, ctx): Promise<IWorkflowEvent>;
-  protected abstract onContinued(result, iteration, ctx): Promise<IWorkflowEvent>;
-  protected abstract onNoTransition(result, event, iteration, ctx): Promise<IWorkflowEvent>;
+interface DurableWorkflowEvent {
+	urn: string | number;
+	initialEvent: string;
+	eventId: string;
+	payload?: unknown;
 }
 ```
 
-Each handler receives a **narrowed** result type (e.g. `Extract<TransitResult, { status: 'idle' }>`) for full type safety.
+The producer supplies a non-blank `eventId` for the initial event and reuses it on redelivery. Callback bodies still contain `event` and an optional `payload`. The adapter derives stable IDs for callbacks. The orchestrator derives stable IDs for automatic continuations.
 
-## Creating Custom Adapters
+The adapter does not use SDK automatic retries for transit steps. It schedules the next attempt only when `transitAttempt()` returns `{ status: 'retry' }`.
 
-Use `OrchestratorService` directly for simple integrations, or extend `BaseWorkflowAdapter` for the full loop pattern.
-
-### HTTP Adapter Example
-
-```typescript
-import { Controller, Post, Body } from '@nestjs/common';
-import { OrchestratorService } from 'nestflow-js/core';
-import type { IWorkflowEvent } from 'nestflow-js/core';
-
-@Controller('workflow')
-export class WorkflowController {
-  constructor(private orchestrator: OrchestratorService) {}
-
-  @Post('events')
-  async handleEvent(@Body() event: IWorkflowEvent) {
-    await this.orchestrator.transit(event);
-    return { status: 'processed' };
-  }
-}
-```
-
-### EventBridge Adapter Example
-
-```typescript
-import { EventBridgeHandler } from 'aws-lambda';
-import { OrchestratorService } from 'nestflow-js/core';
-
-export const handler: EventBridgeHandler<string, any, void> = async (event) => {
-  const app = await getApp();
-  const orchestrator = app.get(OrchestratorService);
-
-  const workflowEvent = {
-    event: event['detail-type'],
-    urn: event.detail.entityId,
-    payload: event.detail,
-    attempt: 0,
-  };
-
-  await orchestrator.transit(workflowEvent);
-};
-```
+Drain in-flight executions before you change their replay behavior. If you deploy a new version while executions are still running, keep those executions on the old version until they finish.
 
 ## Related
 

@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/nestflow-js.svg)](https://www.npmjs.com/package/nestflow-js)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Business state mangement with zero dependencies, no vendor lock-in, no infrastructure constraints — just your entities and their transitions.
+Define business state and transitions. Keep your entities in a storage backend that supports atomic claims and commits.
 
 ## Features
 
@@ -12,7 +12,7 @@ Business state mangement with zero dependencies, no vendor lock-in, no infrastru
 - 🔄 **Durable Execution**: Checkpoint and replay workflows across Lambda invocations using AWS Durable Functions
 - 📦 **Tree-Shakable**: Subpath exports ensure minimal bundle sizes
 - 🛡️ **Type-Safe**: Full TypeScript support with comprehensive type definitions
-- 🔁 **Retry Logic**: Built-in retry mechanisms with exponential backoff
+- 🔁 **Retry Logic**: The Durable Lambda adapter retries handler failures with configurable backoff
 - 🎨 **Decorator-Based API**: Clean, declarative workflow definitions
 
 ## Installation
@@ -40,17 +40,16 @@ export enum OrderStatus {
   Failed = 'failed',
 }
 
-export class Order {
-  id: string;
-  status: OrderStatus;
-  // ... other properties
+export interface Order {
+	id: string;
+	status: OrderStatus;
 }
 ```
 
 ### 2. Create a Workflow
 
 ```typescript
-import { Workflow, OnEvent, Entity, Payload } from 'nestflow-js/core';
+import { Workflow, OnEvent, Entity } from 'nestflow-js/core';
 
 @Workflow({
   name: 'OrderWorkflow',
@@ -74,49 +73,21 @@ import { Workflow, OnEvent, Entity, Payload } from 'nestflow-js/core';
   entityService: 'entity.order',
 })
 export class OrderWorkflow {
-  @OnEvent('order.submit')
-  async onSubmit(@Entity() entity: Order, @Payload() data: any) {
-    console.log('Order submitted:', entity.id);
-    return entity;
-  }
+	@OnEvent('order.submit')
+	async onSubmit(@Entity() order: Order) {
+		return { orderId: order.id };
+	}
 
-  @OnEvent('order.complete')
-  async onComplete(@Entity() entity: Order) {
-    console.log('Order completed:', entity.id);
-    return entity;
-  }
+	@OnEvent('order.complete')
+	async onComplete(@Entity() order: Order) {
+		return { orderId: order.id };
+	}
 }
 ```
 
-### 3. Implement Entity Service
+### 3. Implement the entity service
 
-```typescript
-import { Injectable } from '@nestjs/common';
-import { IWorkflowEntity } from 'nestflow-js/core';
-
-@Injectable()
-export class OrderEntityService implements IWorkflowEntity<Order, OrderStatus> {
-  async create(): Promise<Order> {
-    // Create new order
-  }
-
-  async load(urn: string): Promise<Order | null> {
-    // Load order from database
-  }
-
-  async update(entity: Order, status: OrderStatus): Promise<Order> {
-    // Update order status
-  }
-
-  status(entity: Order): OrderStatus {
-    return entity.status;
-  }
-
-  urn(entity: Order): string {
-    return entity.id;
-  }
-}
-```
+Implement [`IWorkflowEntity`](https://tung-dnt.github.io/nestflow-js/docs/api-reference/interfaces#iworkflowentity) for your storage backend. The orchestrator calls `claimTransition(urn, eventId)` to obtain an exclusive claim or recover a committed receipt. Use the [DynamoDB entity service](examples/lambda-order-state-machine/src/order/order-entity.service.ts) as a working reference.
 
 ### 4. Register the Module
 
@@ -137,13 +108,25 @@ import { OrderEntityService } from './order-entity.service';
 export class OrderModule {}
 ```
 
+## Migrating to transition claims
+
+This is a breaking change. Upgrade event producers and entity services together.
+
+1. Implement `claimTransition(urn, eventId)`. Commit the entity state and receipt atomically, under the current lease token. Do not implement claims by calling `load()` and `update()` separately.
+2. Supply a non-empty `eventId` for every `IWorkflowEvent` and initial `DurableWorkflowEvent`. Keep it unchanged across retries and redeliveries. Never use the same ID for different events on the same entity. Durable callback bodies still contain `{ event, payload }`. The adapter derives their IDs.
+3. Requeue a busy event with the same ID after backoff. The orchestrator raises `ConflictException` (HTTP 409). The Durable Lambda adapter does not treat a conflict, validation error, guard error, storage error, or post-commit error as a handler retry.
+4. Keep guards pure. Persist only serializable entity snapshots and handler output that are safe to store. Use `@EventId()` with the entity ID to deduplicate downstream side effects. A crash before commit can rerun the handler after the lease expires. Receipts deduplicate committed transitions and do not guarantee exactly-once side effects.
+5. Use `transit()` for a single attempt. A custom adapter that retries handlers must call `transitAttempt(event, canRetry)` and schedule another attempt only if it returns `{ status: 'retry' }`.
+
+Before you deploy the Durable Lambda replay changes, drain executions started on the old adapter or use versioning to keep them on that adapter until they finish. Do not replay their checkpoints with the new adapter.
+
 ## Documentation
 
 📚 **[Full Documentation](https://tung-dnt.github.io/nestflow-js/)**
 
-- [Getting Started](https://tung-dnt.github.io/nestflow-js/docs/getting-started)
-- [Workflow Module](https://tung-dnt.github.io/nestflow-js/docs/workflow)
-- [Lambda Adapter](https://tung-dnt.github.io/nestflow-js/docs/adapters)
+- [Quick Start](https://tung-dnt.github.io/nestflow-js/docs/quick-start)
+- [Workflow Definition](https://tung-dnt.github.io/nestflow-js/docs/concepts/workflow-definition)
+- [Durable Lambda Adapter](https://tung-dnt.github.io/nestflow-js/docs/plugins/durable-lambda)
 - [API Reference](https://tung-dnt.github.io/nestflow-js/docs/api-reference/workflow-module)
 - [Examples](https://tung-dnt.github.io/nestflow-js/docs/examples/lambda-order-state-machine)
 
@@ -175,7 +158,7 @@ This ensures minimal bundle sizes and faster cold starts in serverless environme
 
 ## Transit Result
 
-The `transit()` method on the orchestrator returns a `TransitResult`, which adapters use to decide what to do next:
+On success, `transit()` returns one of these results:
 
 ```typescript
 type TransitResult =
@@ -188,45 +171,11 @@ type TransitResult =
 - **`final`** -- the workflow has reached a terminal state.
 - **`idle`** -- the workflow is waiting for an external event.
 - **`continued`** -- the workflow auto-transitioned and provides the next event to process.
-- **`no_transition`** -- no matching transition was found from the current state.
+- `no_transition` means there is no unambiguous automatic continuation.
 
 ## Custom Adapters
 
-Extend `BaseWorkflowAdapter` to plug the orchestrator into any runtime. The base class owns the orchestration loop and dispatches each `TransitResult` variant to a handler method you override:
-
-```typescript
-import { BaseWorkflowAdapter } from 'nestflow-js/adapter';
-import { OrchestratorService } from 'nestflow-js/core';
-import type { IWorkflowEvent, TransitResult } from 'nestflow-js/core';
-
-class MyAdapter extends BaseWorkflowAdapter<MyContext, MyResult> {
-  constructor(orchestrator: OrchestratorService) {
-    super(orchestrator);
-  }
-
-  protected async executeTransit(event: IWorkflowEvent): Promise<TransitResult> {
-    return this.orchestrator.transit(event);
-  }
-
-  protected onFinal(result: Extract<TransitResult, { status: 'final' }>): MyResult {
-    return { status: 'completed', state: result.state };
-  }
-
-  protected async onIdle(result: Extract<TransitResult, { status: 'idle' }>): Promise<IWorkflowEvent> {
-    // Wait for callback, poll a queue, etc.
-  }
-
-  protected async onContinued(result: Extract<TransitResult, { status: 'continued' }>): Promise<IWorkflowEvent> {
-    return result.nextEvent;
-  }
-
-  protected async onNoTransition(result: Extract<TransitResult, { status: 'no_transition' }>): Promise<IWorkflowEvent> {
-    // Wait for an explicit external event
-  }
-}
-```
-
-The built-in `DurableLambdaEventHandler` extends this base with AWS checkpointing and `waitForCallback()` support. See the [Custom Adapter recipe](https://tung-dnt.github.io/nestflow-js/docs/recipes/custom-adapter) for full examples.
+Extend `BaseWorkflowAdapter` to dispatch `TransitResult` variants in a loop. Implement `executeTransit()` for your runtime and return the orchestrator's `nextEvent` unchanged when the result is `continued`. See the [adapter reference](https://tung-dnt.github.io/nestflow-js/docs/api-reference/adapters) for hook signatures and retry rules.
 
 ## Examples
 
@@ -242,7 +191,7 @@ States represent the different stages your entity can be in:
 
 - **Finals**: Terminal states where the workflow ends
 - **Idles**: States where the workflow waits for external events
-- **Failed**: The failure state to transition to on errors
+- **Failed**: The state committed after an unretriable handler error or after the last handler attempt fails
 
 ### Transitions
 
@@ -250,44 +199,41 @@ Transitions define how entities move from one state to another, triggered by eve
 
 ```typescript
 {
-  from: [OrderStatus.Pending],
-  to: OrderStatus.Processing,
-  event: 'order.submit',
-  conditions: [
-    (entity: Order, payload: any) => entity.items.length > 0,
-  ],
+	from: [OrderStatus.Pending],
+	to: OrderStatus.Processing,
+	event: 'order.submit',
+	conditions: [
+		(entity: Order, payload?: { approved: boolean }) => payload?.approved === true,
+	],
 }
 ```
 
 ### Events
 
-Events trigger state transitions. The `IWorkflowEvent` interface (from `nestflow-js/core`) defines the shape of workflow events:
+Events trigger state transitions. Pass an [`IWorkflowEvent`](https://tung-dnt.github.io/nestflow-js/docs/api-reference/interfaces#iworkflowevent) to the orchestrator:
 
 ```typescript
-interface IWorkflowEvent<T = any> {
-  event: string;        // event name that triggers a transition
-  urn: string | number; // unique identifier of the entity
-  payload?: T;          // optional data passed to the handler
-  attempt: number;      // retry attempt counter
-}
+import type { IWorkflowEvent } from 'nestflow-js/core';
+
+const event: IWorkflowEvent = {
+	event: 'order.submit',
+	urn: 'order-123',
+	eventId: 'submit-command-456',
+	attempt: 0,
+};
 ```
 
-Define event handlers using the `@OnEvent` decorator:
-
-```typescript
-@OnEvent('order.submit')
-async onSubmit(@Entity() entity: Order, @Payload() data: any) {
-  // Handle the event
-}
-```
+In production, use the ID of the logical command or delivery instead of a constant. Give each distinct event on the entity its own ID.
 
 ## AWS Lambda Integration
 
-The library includes a Durable Lambda adapter (`DurableLambdaEventHandler`) that leverages [AWS Lambda Durable Functions](https://aws.amazon.com/blogs/compute/) for checkpoint and replay. Each workflow instance runs as a single durable execution spanning multiple Lambda invocations:
+The built-in `DurableLambdaEventHandler` runs the workflow across Lambda invocations with [AWS Lambda Durable Functions](https://docs.aws.amazon.com/lambda/latest/dg/durable-functions.html).
 
-- **Checkpointed steps** -- completed transitions are persisted; on replay they return stored results.
-- **Idle state pausing** -- idle states pause via `waitForCallback()` until an external system resumes the workflow.
-- **Final state completion** -- reaching a final state ends the durable execution.
+- Completed Durable steps return their checkpointed results on replay.
+- Idle states wait for an external event through `waitForCallback()`.
+- A final result ends the execution.
+
+Send `{ urn, initialEvent, eventId, payload? }` to start an execution. The adapter does not use SDK automatic retries for transit steps. It schedules another attempt only when the orchestrator returns `{ status: 'retry' }`.
 
 ```typescript
 import { withDurableExecution } from '@aws/durable-execution-sdk-js';

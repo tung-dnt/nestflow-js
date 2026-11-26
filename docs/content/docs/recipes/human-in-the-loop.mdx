@@ -4,17 +4,17 @@ description: Pause a workflow for human approval and resume it via an external c
 ---
 
 
-## The Pattern
+## Pause for approval
 
-1. Define an **idle state** where the workflow waits (e.g., `PENDING_APPROVAL`)
-2. The adapter pauses at idle states using `waitForCallback()`
-3. A human reviews and approves via your UI/API
-4. Your backend calls `SendDurableExecutionCallbackSuccess` to resume the workflow
+1. Define an idle state and transitions that check the approval decision.
+2. Start a durable execution with a stable `eventId` and no approval decision.
+3. When the adapter registers a callback, associate its ID with the pending review on your backend.
+4. After an authorized user submits a decision, call `SendDurableExecutionCallbackSuccess` to resume the workflow.
 
-## Workflow Definition
+## Define the workflow
 
 ```typescript
-import { Workflow, OnEvent, Entity, Payload } from 'nestflow-js/core';
+import { OnEvent, Workflow } from 'nestflow-js/core';
 
 enum OrderState {
   PENDING_APPROVAL = 'pending_approval',
@@ -28,7 +28,7 @@ enum OrderState {
   name: 'OrderWorkflow',
   states: {
     finals: [OrderState.SHIPPED, OrderState.REJECTED],
-    idles: [OrderState.PENDING_APPROVAL],  // <-- workflow pauses here
+    idles: [OrderState.PENDING_APPROVAL],
     failed: OrderState.FAILED,
   },
   transitions: [
@@ -54,111 +54,53 @@ enum OrderState {
 })
 export class OrderWorkflow {
   @OnEvent('order.created')
-  async onCreated(@Entity() order: Order, @Payload() payload: any) {
+  async onCreated() {
     return { reviewedAt: new Date().toISOString() };
   }
 
   @OnEvent('order.ship')
-  async onShip(@Entity() order: Order) {
+  async onShip() {
     return { shippedAt: new Date().toISOString() };
   }
 }
 ```
 
-## How It Works with DurableLambdaEventHandler
+## Start the durable execution
 
-When the workflow starts, the entity is created in `PENDING_APPROVAL` state. Since this is an idle state, the adapter calls `ctx.waitForCallback()` and pauses execution:
+Create the order in `PENDING_APPROVAL` before invoking the Lambda. Use the order ID as `urn` and the producer's stable ID for this event as `eventId`:
 
+```typescript
+const startEvent = {
+	urn: 'order-1',
+	eventId: 'order-created-001',
+	initialEvent: 'order.created',
+};
 ```
-1. Event: { urn: 'order-1', initialEvent: 'order.created', payload: {} }
-2. Orchestrator sees entity is in PENDING_APPROVAL (idle) → returns { status: 'idle' }
-3. Adapter calls ctx.waitForCallback('idle:pending_approval:0', ...)
-4. Execution pauses — Lambda returns, but durable execution stays open
-```
 
-## Resuming via Callback
+Reuse `eventId` if you redeliver this event for the same order. With no approval decision, neither guard matches. The orchestrator returns `idle`, and the adapter registers a callback with `ctx.waitForCallback()`.
 
-When a human approves the order, your API calls the Lambda `SendDurableExecutionCallbackSuccess` API:
+## Resume with a callback
+
+When your backend accepts a decision, use the callback ID it stored for that review:
 
 ```typescript
 import { LambdaClient, SendDurableExecutionCallbackSuccessCommand } from '@aws-sdk/client-lambda';
 
 const lambda = new LambdaClient({});
 
-// The callbackId was logged by the adapter when it paused
 await lambda.send(new SendDurableExecutionCallbackSuccessCommand({
-  CallbackId: callbackId,
-  Result: JSON.stringify({
-    event: 'order.created',
-    payload: { approved: true },
-  }),
+	CallbackId: callbackId,
+	Result: JSON.stringify({
+		event: 'order.created',
+		payload: { approved: true },
+	}),
 }));
 ```
 
-The callback payload must include an `event` name and optional `payload`. The adapter parses this and feeds it back into `orchestrator.transit()`.
+Send `approved: false` to reject the order. Send only the `event` name and optional `payload`. The adapter derives a stable `eventId` for the callback event. Approval moves the order to `APPROVED` and the `order.ship` transition takes it to `SHIPPED`. Rejection takes it directly to `REJECTED`.
 
-## Approval API Example
+Set a per-state timeout or a workflow default if the review should expire in less than 24 hours. See [callback timeout configuration](/docs/plugins/durable-lambda#timeout-configuration).
 
-```typescript
-import { Controller, Post, Param, Body } from '@nestjs/common';
-import { LambdaClient, SendDurableExecutionCallbackSuccessCommand } from '@aws-sdk/client-lambda';
+## Test the callback flow
 
-@Controller('orders')
-export class OrderApprovalController {
-  private lambda = new LambdaClient({});
-
-  @Post(':id/approve')
-  async approve(@Param('id') orderId: string, @Body() body: { callbackId: string }) {
-    await this.lambda.send(new SendDurableExecutionCallbackSuccessCommand({
-      CallbackId: body.callbackId,
-      Result: JSON.stringify({
-        event: 'order.created',
-        payload: { approved: true },
-      }),
-    }));
-    return { status: 'approved' };
-  }
-
-  @Post(':id/reject')
-  async reject(@Param('id') orderId: string, @Body() body: { callbackId: string }) {
-    await this.lambda.send(new SendDurableExecutionCallbackSuccessCommand({
-      CallbackId: body.callbackId,
-      Result: JSON.stringify({
-        event: 'order.created',
-        payload: { approved: false },
-      }),
-    }));
-    return { status: 'rejected' };
-  }
-}
-```
-
-## Testing
-
-Use `MockDurableContext` to simulate the callback flow:
-
-```typescript
-const handler = DurableLambdaEventHandler(app, mockWithDurableExecution);
-const ctx = new MockDurableContext();
-
-// Start workflow — it will pause at PENDING_APPROVAL
-const resultPromise = handler(
-  { urn: 'order-1', initialEvent: 'order.created', payload: {} },
-  ctx,
-);
-
-// Simulate human approval
-ctx.submitCallback('idle:pending_approval:0', {
-  event: 'order.created',
-  payload: { approved: true },
-});
-
-const result = await resultPromise;
-// result.status === 'completed', result.state === 'shipped'
-```
-
-See [Testing with MockDurableContext](/docs/plugins/durable-lambda#testing-with-mockdurablecontext) for the full mock implementation.
-
-## Timeout
-
-The `timeout` field on TransitResult's idle status controls how long the adapter waits before timing out. You can configure this through your workflow's transition definitions. The default is 24 hours.
+Wait for callback registration in your test before submitting the result. See the [Durable Lambda order tests](https://github.com/tung-dnt/nestflow-js/blob/main/test/e2e/durable/durable-order.spec.ts) for a test with the AWS local runner.

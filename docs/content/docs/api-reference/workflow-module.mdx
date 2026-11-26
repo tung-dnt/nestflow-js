@@ -1,6 +1,6 @@
 ---
 title: WorkflowModule
-description: The WorkflowModule is the main entry point for registering workflows, entities, and brokers.
+description: Register workflows, entity services, and payload validation with NestJS.
 ---
 
 
@@ -27,6 +27,8 @@ WorkflowModule.register({
   providers?: Provider[];              // Additional providers
 })
 ```
+
+Each workflow's `entityService` token must resolve to an `IWorkflowEntity` implementation. The orchestrator checks for `claimTransition()` during initialization.
 
 #### Returns
 

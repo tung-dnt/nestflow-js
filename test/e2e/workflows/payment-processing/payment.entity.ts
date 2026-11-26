@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { IWorkflowEntity } from '@/core';
+import { InMemoryWorkflowEntity } from '../../fixtures/in-memory-workflow-entity';
 
 export enum PaymentState {
   INITIATED = 'initiated',
@@ -30,8 +30,10 @@ export interface Payment {
  * In-memory entity service for testing
  */
 @Injectable()
-export class PaymentEntityService implements IWorkflowEntity<Payment, PaymentState> {
-  private payments = new Map<string, Payment>();
+export class PaymentEntityService extends InMemoryWorkflowEntity<Payment, 'status'> {
+  constructor() {
+    super('status');
+  }
 
   async create(): Promise<Payment> {
     const payment: Payment = {
@@ -42,34 +44,6 @@ export class PaymentEntityService implements IWorkflowEntity<Payment, PaymentSta
       retryCount: 0,
       createdAt: new Date().toISOString(),
     };
-    this.payments.set(payment.id, payment);
-    return payment;
-  }
-
-  async load(urn: string | number): Promise<Payment | null> {
-    return this.payments.get(String(urn)) || null;
-  }
-
-  async update(payment: Payment, status: PaymentState): Promise<Payment> {
-    const updated = { ...payment, status };
-    this.payments.set(payment.id, updated);
-    return updated;
-  }
-
-  status(payment: Payment): PaymentState {
-    return payment.status;
-  }
-
-  urn(payment: Payment): string | number {
-    return payment.id;
-  }
-
-  // Test helpers
-  clear(): void {
-    this.payments.clear();
-  }
-
-  getAll(): Payment[] {
-    return Array.from(this.payments.values());
+    return this.save(payment);
   }
 }

@@ -12,86 +12,65 @@ Interface for entity services that manage workflow entities.
 
 ```typescript
 interface IWorkflowEntity<T = any, State = string | number> {
-  create(): Promise<T>;
-  load(urn: string | number): Promise<T | null>;
-  update(entity: T, status: State): Promise<T>;
-  status(entity: T): State;
-  urn(entity: T): string | number;
+	create(): Promise<T>;
+	load(urn: string | number): Promise<T | null>;
+	update(entity: T, status: State): Promise<T>;
+	claimTransition(urn: string | number, eventId: string): Promise<TransitionClaim<T, State>>;
+	status(entity: T): State;
+	urn(entity: T): string | number;
 }
 ```
 
-### Methods
+| Method | Returns |
+|--------|---------|
+| `create()` | A new entity. |
+| `load(urn)` | The entity, or `null` if it does not exist. |
+| `update(entity, status)` | The updated entity. The orchestrator does not use this method for transitions. |
+| `claimTransition(urn, eventId)` | The claim or receipt for this delivery. |
+| `status(entity)` | The entity's current state. |
+| `urn(entity)` | The entity's identifier. |
 
-#### `create()`
-
-Creates a new entity instance.
-
-**Returns**: Promise resolving to the new entity.
-
-#### `load(urn)`
-
-Loads an entity by its unique resource name.
-
-**Parameters**:
-- `urn`: Unique resource name (entity identifier)
-
-**Returns**: Promise resolving to the entity or null if not found.
-
-#### `update(entity, status)`
-
-Updates an entity's status.
-
-**Parameters**:
-- `entity`: The entity to update
-- `status`: The new status
-
-**Returns**: Promise resolving to the updated entity.
-
-#### `status(entity)`
-
-Gets the current status of an entity.
-
-**Parameters**:
-- `entity`: The entity
-
-**Returns**: The current status.
-
-#### `urn(entity)`
-
-Gets the unique resource name of an entity.
-
-**Parameters**:
-- `entity`: The entity
-
-**Returns**: The entity's URN.
-
-### Example
+### TransitionClaim
 
 ```typescript
-@Injectable()
-export class OrderEntityService implements IWorkflowEntity<Order, OrderStatus> {
-  async create(): Promise<Order> {
-    return { id: uuid(), status: OrderStatus.Pending };
-  }
-
-  async load(urn: string): Promise<Order | null> {
-    return await this.repository.findOne({ where: { id: urn } });
-  }
-
-  async update(entity: Order, status: OrderStatus): Promise<Order> {
-    entity.status = status;
-    return await this.repository.save(entity);
-  }
-
-  status(entity: Order): OrderStatus {
-    return entity.status;
-  }
-
-  urn(entity: Order): string {
-    return entity.id;
-  }
-}
+type TransitionClaim<T, State> =
+	| { kind: 'missing' }
+	| { kind: 'busy' }
+	| { kind: 'completed'; receipt: TransitionReceipt<T> }
+	| {
+			kind: 'acquired';
+			entity: T;
+			commit(state: State, completion: TransitionCompletion): Promise<TransitionReceipt<T>>;
+			release(): Promise<void>;
+		};
 ```
+
+| Kind | Meaning |
+|------|---------|
+| `missing` | The entity does not exist. |
+| `busy` | The entity has a live claim and this event has no receipt. |
+| `completed` | This event already committed for this entity. |
+| `acquired` | The caller owns the entity's transition lease. |
+
+`commit()` must verify the owner's token, write the updated entity and receipt, and clear the claim atomically. A prior owner cannot commit after takeover. `release()` clears only the caller's own claim.
+
+### TransitionReceipt
+
+```typescript
+interface TransitionReceipt<T> {
+	entity: T;
+	completion: TransitionCompletion;
+}
+
+type TransitionCompletion =
+	| { kind: 'applied'; output: unknown }
+	| { kind: 'unretriable' }
+	| { kind: 'exhausted' };
+```
+
+`entity` is the snapshot at commit, not the current entity. `applied` records the handler output. `unretriable` records an `UnretriableException`. `exhausted` records a handler failure on the last allowed attempt. Entity snapshots and handler output must be serializable and safe to persist.
+
+See the [entity service storage requirements](/docs/concepts/entity-service) and the [DynamoDB implementation](https://github.com/tung-dnt/nestflow-js/blob/main/examples/lambda-order-state-machine/src/order/order-entity.service.ts).
 
 ## IWorkflowEvent
 
@@ -101,10 +80,11 @@ Interface for workflow events.
 
 ```typescript
 interface IWorkflowEvent<T = any> {
-  event: string;        // Event name that triggers a transition
-  urn: string | number; // Unique resource name (entity identifier)
-  payload?: T | object | string; // Optional event data
-  attempt: number;      // Retry attempt number
+	event: string;
+	urn: string | number;
+	eventId: string;
+	payload?: T | object | string;
+	attempt: number;
 }
 ```
 
@@ -112,20 +92,22 @@ interface IWorkflowEvent<T = any> {
 
 - `event`: Event name that triggers a transition (e.g., 'order.submit')
 - `urn`: Unique resource name identifying the entity
+- `eventId`: Non-blank delivery ID. Reuse it for every retry and redelivery of the same logical event. Do not reuse it for a different event on the same entity.
 - `payload?`: Optional event payload data
-- `attempt`: Current retry attempt number (starts at 0)
+- `attempt`: Zero-based retry attempt number, managed by the adapter.
 
 ### Example
 
 ```typescript
 const event: IWorkflowEvent = {
-  event: 'order.submit',
-  urn: 'order-12345',
-  payload: {
-    items: ['item1', 'item2'],
-    total: 150.00,
-  },
-  attempt: 0,
+	event: 'order.submit',
+	urn: 'order-12345',
+	eventId: 'submit-command-456',
+	payload: {
+		items: ['item1', 'item2'],
+		total: 150,
+	},
+	attempt: 0,
 };
 ```
 
@@ -156,10 +138,10 @@ interface IWorkflowDefinition<T, Event, State> {
 - `states`: State configuration
   - `finals`: Terminal states where the workflow is considered complete
   - `idles`: Idle states (waiting for external events). Each entry can be a bare state value or an object with a per-state callback timeout (see [IdleStateEntry](#idlestateentry))
-  - `failed`: Failure state
+  - `failed`: State committed for an unretriable handler error or when the last allowed handler attempt fails
 - `defaultCallbackTimeout?`: Default timeout applied to all idle states that do not specify their own timeout (see [Duration](#duration))
 - `transitions`: Array of transition definitions
-- `conditions?`: Optional global conditions that must all pass for any transition to proceed
+- `conditions?`: Optional pure global guards that must all pass for a transition to proceed
 - `entityService`: Injection token for the entity service
 
 ### Example
@@ -207,7 +189,7 @@ interface ITransitionEvent<T, Event, State = string, P = unknown> {
 - `event`: Event that triggers the transition
 - `from`: Array of source states
 - `to`: Target state
-- `conditions?`: Optional condition functions (all must return true)
+- `conditions?`: Optional pure guards that must all return `true`
 
 ### Example
 
@@ -243,8 +225,8 @@ interface IBackoffRetryConfig {
 
 ### Properties
 
-- `handler`: Injection token for the retry handler (required)
-- `maxAttempts`: Maximum number of retry attempts
+- `handler`: Name of the handler method (required)
+- `maxAttempts`: Positive safe integer. Maximum total attempts, including the initial attempt.
 - `strategy?`: Backoff strategy from the `RetryStrategy` enum (defaults to `EXPONENTIAL_JITTER`)
 - `initialDelay?`: Initial delay in milliseconds (defaults to 1000)
 - `backoffMultiplier?`: Multiplier applied to the delay on each retry (defaults to 2)
@@ -255,9 +237,9 @@ interface IBackoffRetryConfig {
 
 ```typescript
 enum RetryStrategy {
-  FIXED = 'FIXED',
-  EXPONENTIAL = 'EXPONENTIAL',
-  EXPONENTIAL_JITTER = 'EXPONENTIAL_JITTER', // default
+	FIXED = 'fixed',
+	EXPONENTIAL = 'exponential',
+	EXPONENTIAL_JITTER = 'exponential_jitter',
 }
 ```
 
@@ -269,13 +251,13 @@ enum RetryStrategy {
 
 ```typescript
 const retryConfig: IBackoffRetryConfig = {
-  handler: 'PaymentRetryHandler',
-  maxAttempts: 5,
-  strategy: RetryStrategy.EXPONENTIAL_JITTER,
-  initialDelay: 1000,
-  backoffMultiplier: 2,
-  maxDelay: 30000,
-  jitter: true,
+	handler: 'processPayment',
+	maxAttempts: 5,
+	strategy: RetryStrategy.EXPONENTIAL_JITTER,
+	initialDelay: 1000,
+	backoffMultiplier: 2,
+	maxDelay: 30000,
+	jitter: true,
 };
 ```
 

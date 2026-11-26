@@ -1,10 +1,11 @@
-import type { INestApplicationContext } from '@nestjs/common';
+import { BadRequestException, type INestApplicationContext } from '@nestjs/common';
 import { OrchestratorService, RetryBackoff, type IWorkflowEvent, type TransitResult } from '@/core';
-import { UnretriableException } from '@/exception/unretriable.exception';
+import { randomUUID } from 'node:crypto';
 import { BaseWorkflowAdapter } from './base-workflow.adapter';
 
 export interface DurableWorkflowEvent {
   urn: string | number;
+  eventId: string;
   initialEvent: string;
   payload?: any;
 }
@@ -20,7 +21,11 @@ export interface DurableWorkflowResult {
  * The actual SDK (`@aws/durable-execution-sdk-js`) is a peer dependency — only needed at runtime.
  */
 export interface IDurableContext {
-  step<T>(name: string, fn: () => Promise<T>): Promise<T>;
+  step<T>(
+    name: string,
+    fn: () => Promise<T>,
+    options?: { retryStrategy?: (error: Error, attemptCount: number) => { shouldRetry: boolean } },
+  ): Promise<T>;
   waitForCallback<T>(
     name: string,
     onRegister: (callbackId: string) => Promise<void>,
@@ -30,48 +35,50 @@ export interface IDurableContext {
   logger: { info(msg: string, data?: any): void };
 }
 
-/**
- * Type for the withDurableExecution wrapper function from the AWS SDK.
- */
-export type WithDurableExecution = <TEvent, TResult>(
-  handler: (event: TEvent, ctx: IDurableContext) => Promise<TResult>,
-) => (event: TEvent, ctx: any) => Promise<TResult>;
+type DurableWorkflowHandler = (event: DurableWorkflowEvent, ctx: IDurableContext) => Promise<DurableWorkflowResult>;
+
+export type WithDurableExecution<WrappedHandler = DurableWorkflowHandler> = (
+  handler: DurableWorkflowHandler,
+) => WrappedHandler;
 
 const DEFAULT_CALLBACK_TIMEOUT = { hours: 24 };
+const NO_STEP_RETRY = { retryStrategy: () => ({ shouldRetry: false }) };
 
 /**
  * Parse a callback result from the SDK.
  * The real SDK delivers callback results as JSON strings via SendDurableExecutionCallbackSuccess.
  */
-function parseCallbackResult<T>(raw: unknown): T {
+function parseCallbackResult(raw: unknown): { event: string; payload?: unknown } {
+  let value = raw;
   if (typeof raw === 'string') {
     try {
-      return JSON.parse(raw);
+      value = JSON.parse(raw);
     } catch {
-      return raw as T;
+      throw new BadRequestException('Invalid workflow callback JSON');
     }
   }
-  return raw as T;
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    !('event' in value) ||
+    typeof value.event !== 'string' ||
+    !value.event.trim()
+  ) {
+    throw new BadRequestException('Workflow callback event is required');
+  }
+  return { event: value.event, payload: 'payload' in value ? value.payload : undefined };
 }
 
-/**
- * Concrete adapter that wraps the workflow orchestrator in an AWS durable execution.
- *
- * Each workflow instance runs as a single durable execution spanning multiple Lambda invocations.
- * Steps are checkpointed at event boundaries — on replay, completed steps return stored results.
- */
 class DurableLambdaWorkflowAdapter extends BaseWorkflowAdapter<IDurableContext, DurableWorkflowResult> {
-  private urn!: string | number;
-
-  constructor(orchestrator: OrchestratorService) {
-    super(orchestrator);
-  }
-
   async run(event: DurableWorkflowEvent, ctx: IDurableContext): Promise<DurableWorkflowResult> {
-    this.urn = event.urn;
+    if (typeof event.eventId !== 'string' || !event.eventId.trim()) {
+      throw new BadRequestException('A stable workflow eventId is required');
+    }
+
     const initialEvent: IWorkflowEvent = {
       event: event.initialEvent,
       urn: event.urn,
+      eventId: event.eventId,
       payload: event.payload,
       attempt: 0,
     };
@@ -86,42 +93,45 @@ class DurableLambdaWorkflowAdapter extends BaseWorkflowAdapter<IDurableContext, 
     const retryConfig = this.orchestrator.getRetryConfig(currentEvent.event);
     const maxAttempts = retryConfig?.maxAttempts ?? 1;
 
-    let lastError: Error | undefined;
-
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      try {
-        return await ctx.step(`transit:${currentEvent.event}:${iteration}:${attempt}`, () =>
-          this.orchestrator.transit(currentEvent),
-        );
-      } catch (e) {
-        if (e instanceof UnretriableException) throw e;
-        lastError = e as Error;
+      const checkpoint = await ctx.step<TransitResult | { status: 'retry'; delayMs: number }>(
+        `transit:${currentEvent.event}:${iteration}:${attempt}`,
+        async () => {
+          const params = { ...currentEvent, attempt };
+          if (!retryConfig || attempt + 1 === maxAttempts) {
+            return this.orchestrator.transitAttempt(params, false);
+          }
 
-        if (attempt < maxAttempts - 1) {
-          const delay = RetryBackoff.calculateDelay(attempt, retryConfig!);
-          ctx.logger.info(
-            `Handler ${currentEvent.event} failed (attempt ${attempt + 1}/${maxAttempts}), retrying in ${delay}ms`,
-          );
-          await ctx.wait({ seconds: Math.ceil(delay / 1000) });
-        }
-      }
+          const result = await this.orchestrator.transitAttempt(params, true);
+          return result.status === 'retry'
+            ? { status: 'retry', delayMs: RetryBackoff.calculateDelay(attempt, retryConfig) }
+            : result;
+        },
+        NO_STEP_RETRY,
+      );
+
+      if (checkpoint.status !== 'retry') return checkpoint;
+      const { delayMs } = checkpoint;
+      ctx.logger.info(
+        `Handler ${currentEvent.event} failed (attempt ${attempt + 1}/${maxAttempts}), retrying in ${delayMs}ms`,
+      );
+      if (delayMs !== 0) await ctx.wait({ seconds: Math.ceil(delayMs / 1000) });
     }
 
-    throw lastError!;
+    throw new Error(`No transit result within retry budget for event: ${currentEvent.event}`);
   }
 
-  // TODO: review adapter hooks' logic
   protected onFinal(
     result: Extract<TransitResult, { status: 'final' }>,
-    _event: IWorkflowEvent,
+    event: IWorkflowEvent,
     _ctx: IDurableContext,
   ): DurableWorkflowResult {
-    return { urn: this.urn, status: 'completed', state: result.state };
+    return { urn: event.urn, status: 'completed', state: result.state };
   }
 
   protected async onIdle(
     result: Extract<TransitResult, { status: 'idle' }>,
-    _event: IWorkflowEvent,
+    event: IWorkflowEvent,
     iteration: number,
     ctx: IDurableContext,
   ): Promise<IWorkflowEvent> {
@@ -133,11 +143,10 @@ class DurableLambdaWorkflowAdapter extends BaseWorkflowAdapter<IDurableContext, 
       },
       { timeout },
     );
-    const callbackPayload = parseCallbackResult<{ event: string; payload?: any }>(raw);
     return {
-      event: callbackPayload.event,
-      urn: this.urn,
-      payload: callbackPayload.payload,
+      ...parseCallbackResult(raw),
+      urn: event.urn,
+      eventId: await ctx.step(`callback-event-id:${iteration}`, async () => randomUUID(), NO_STEP_RETRY),
       attempt: 0,
     };
   }
@@ -147,14 +156,12 @@ class DurableLambdaWorkflowAdapter extends BaseWorkflowAdapter<IDurableContext, 
     iteration: number,
     ctx: IDurableContext,
   ): Promise<IWorkflowEvent> {
-    // Checkpoint the progression — on replay, returns stored result
-    await ctx.step(`${result.nextEvent.event}:${iteration}`, async () => result.nextEvent);
-    return result.nextEvent;
+    return ctx.step(`${result.nextEvent.event}:${iteration}`, async () => result.nextEvent);
   }
 
   protected async onNoTransition(
     result: Extract<TransitResult, { status: 'no_transition' }>,
-    _event: IWorkflowEvent,
+    event: IWorkflowEvent,
     iteration: number,
     ctx: IDurableContext,
   ): Promise<IWorkflowEvent> {
@@ -166,29 +173,26 @@ class DurableLambdaWorkflowAdapter extends BaseWorkflowAdapter<IDurableContext, 
       },
       { timeout },
     );
-    const noTransitionPayload = parseCallbackResult<{ event: string; payload?: any }>(raw);
     return {
-      event: noTransitionPayload.event,
-      urn: this.urn,
-      payload: noTransitionPayload.payload,
+      ...parseCallbackResult(raw),
+      urn: event.urn,
+      eventId: await ctx.step(`callback-event-id:${iteration}`, async () => randomUUID(), NO_STEP_RETRY),
       attempt: 0,
     };
   }
 }
 
 /**
- * Creates a Lambda handler that wraps the workflow orchestrator in a durable execution.
- *
- * Each workflow instance runs as a single durable execution spanning multiple Lambda invocations.
- * Steps are checkpointed at event boundaries — on replay, completed steps return stored results.
- *
- * Idle states pause via `ctx.waitForCallback()` until an external system submits a callback.
- * Final states end the durable execution.
+ * Wrap an invocation in AWS Durable Execution. Each checkpointed attempt
+ * replays its stored result. An attempt interrupted before checkpointing can run again.
  *
  * @param app - NestJS application context
  * @param withDurableExecution - The `withDurableExecution` function from `@aws/durable-execution-sdk-js`
  */
-export const DurableLambdaEventHandler = (app: INestApplicationContext, withDurableExecution: WithDurableExecution) => {
+export const DurableLambdaEventHandler = <WrappedHandler>(
+  app: INestApplicationContext,
+  withDurableExecution: WithDurableExecution<WrappedHandler>,
+): WrappedHandler => {
   const orchestrator = app.get(OrchestratorService);
   const adapter = new DurableLambdaWorkflowAdapter(orchestrator);
 
