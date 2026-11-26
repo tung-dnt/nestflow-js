@@ -259,7 +259,7 @@ describe('Workflow transition regressions', () => {
     test('rejects invalid payloads without running the handler or changing the state', async () => {
       let handlerCalls = 0;
       const { app, event, orchestrator, store } = await createWorkflow({
-        payloadValidator: async () => {
+        payloadValidator: () => {
           throw new Error('Missing approval');
         },
         handle: async () => {
