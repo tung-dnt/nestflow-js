@@ -1,40 +1,41 @@
-# Contributing to serverless-workflow
+# Contributing to nestflow-js
 
-Thank you for your interest in contributing to serverless-workflow! This document provides guidelines and instructions for contributing.
+## Development setup
 
-## Development Setup
+Use Node.js 26 at the version pinned in [`.node-version`](.node-version). Use pnpm 12.23.0, pinned in `package.json`.
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/@nestflow-js.git
+   git clone https://github.com/tung-dnt/nestflow-js.git
    cd nestflow-js
    ```
 
-2. **Install dependencies**
+2. **Install dependencies for the library, docs, and Lambda example from the repository root**
    ```bash
-   bun install
+   pnpm install --frozen-lockfile
    ```
 
 3. **Run tests**
    ```bash
-   bun test
+   pnpm test
    ```
 
 4. **Build the package**
    ```bash
-   bun run build
+   pnpm build
    ```
+
+Run `pnpm --dir docs dev` from the repository root to preview the docs.
 
 ## Project Structure
 
 ```
 nestflow-js/
-├── src/                    # Source code
-│   ├── workflow/          # Core workflow module
-│   ├── event-bus/         # Event bus and brokers
+├── packages/               # Library source
+│   ├── core/              # Core workflow module
 │   ├── adapter/           # Runtime adapters
 │   └── exception/         # Custom exceptions
-├── tests/                 # Test files
+├── test/                   # Test files
 ├── examples/              # Example implementations
 ├── docs/                  # Documentation
 └── scripts/               # Build and utility scripts
@@ -65,13 +66,16 @@ git checkout -b fix/your-bug-fix
 
 ```bash
 # Run tests
-bun test
+pnpm test
 
 # Run tests in watch mode
-bun test:watch
+pnpm test:watch
 
 # Run tests with coverage
-bun test:cov
+pnpm test:cov
+
+# Run end-to-end tests
+pnpm test:e2e
 ```
 
 ### 4. Documentation
@@ -109,10 +113,13 @@ Types:
    git rebase origin/main
    ```
 
-2. **Run tests and linting**
+2. **Run the CI checks from the repository root**
    ```bash
-   bun test
-   bun run typecheck
+   pnpm check
+   pnpm test
+   pnpm build
+   pnpm verify:package
+   pnpm verify:lambda
    ```
 
 3. **Create Pull Request**
@@ -130,19 +137,16 @@ Types:
 
 ### Building
 
-The package uses TypeScript compiler for ESM output:
+Build the ESM package and TypeScript declarations with:
 
 ```bash
-bun run build
+pnpm build
 ```
 
 Output structure:
 ```
 dist/
-├── workflow/
-│   ├── index.js
-│   └── index.d.ts
-├── event-bus/
+├── core/
 │   ├── index.js
 │   └── index.d.ts
 ├── adapter/
@@ -153,31 +157,27 @@ dist/
     └── index.d.ts
 ```
 
-### Testing Locally
+### Verify build artifacts
 
-Test the package locally before publishing:
+From the repository root, run:
 
 ```bash
-# Build the package
-bun run build
-
-# Link locally
-npm link
-
-# In another project
-npm link serverless-workflow
+pnpm verify:package
+pnpm verify:lambda
 ```
+
+`pnpm verify:package` packs the built library and loads its public subpaths in Node.js. `pnpm verify:lambda` builds and loads the example handler in isolation.
 
 ## Adding New Modules
 
 When adding a new module:
 
-1. Create the module directory under `src/`
+1. Create the module directory under `packages/`
 2. Add an `index.ts` file with exports
 3. Update `package.json` exports field
 4. Update `package.json` typesVersions
 5. Add documentation in `docs/`
-6. Add tests in `tests/`
+6. Add tests in `test/`
 7. Add examples in `examples/`
 
 Example:
@@ -202,22 +202,7 @@ Example:
 
 ## Release Process
 
-1. Update version in `package.json`
-2. Update `CHANGELOG.md`
-3. Create git tag
-4. Build and test
-5. Publish to npm
-
-```bash
-# Update version
-npm version patch|minor|major
-
-# Build
-bun run build
-
-# Publish
-npm publish
-```
+See the [publishing guide](PUBLISHING.md) for the GitHub Actions release process.
 
 ## Getting Help
 

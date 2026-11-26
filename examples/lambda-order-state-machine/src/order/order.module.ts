@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
 import { WorkflowModule } from 'nestflow-js/core';
 
-import { OrderEntityService } from './order-entity.service';
-import { ORDER_WORKFLOW_ENTITY } from './order.constant';
-import { OrderWorkflow } from './order.workflow';
+import { OrderEntityService } from './order-entity.service.js';
+import { ORDER_WORKFLOW_ENTITY } from './order.constant.js';
+import { OrderWorkflow } from './order.workflow.js';
 
 @Module({
   imports: [

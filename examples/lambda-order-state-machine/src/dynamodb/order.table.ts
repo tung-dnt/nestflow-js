@@ -1,5 +1,5 @@
 import { Entity, item, number, string, Table, type TransformedValue } from 'dynamodb-toolbox';
-import { DocumentClient } from './client';
+import { DocumentClient } from './client.js';
 
 export enum OrderState {
   PENDING = 'pending',

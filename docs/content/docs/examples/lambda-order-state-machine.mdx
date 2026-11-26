@@ -24,22 +24,32 @@ The order workflow has no `@WithRetry` configuration. An ordinary handler error 
 
 ## Deploy and invoke
 
-Configure AWS credentials and bootstrap CDK for your account and region before your first deployment. From the checkout, run:
+Use Node.js 26 at the version pinned in the [repository's `.node-version`](https://github.com/tung-dnt/nestflow-js/blob/main/.node-version), pnpm 12.23.0, and AWS CLI v2. Configure AWS credentials with permission to deploy to an account and region that support Durable Lambda on Node.js 26.
+
+From the repository root, install the workspace dependencies and build the library:
 
 ```bash
+pnpm install --frozen-lockfile
+pnpm build
 cd examples/lambda-order-state-machine
-bun install
-bun run deploy:dev
 ```
 
-Follow the [example's quick start](https://github.com/tung-dnt/nestflow-js/blob/main/examples/lambda-order-state-machine/QUICK_START.md) to seed a pending order. Use the deployed `FunctionAliasArn` as `FUNCTION_ALIAS_ARN` and the seeded order ID as `urn`:
+Set the AWS region. Bootstrap CDK if this is your first deployment to that account and region. The deploy script builds `dist/lambda.mjs` before deploying the stack.
+
+```bash
+export AWS_REGION=us-east-1
+pnpm exec cdk bootstrap "aws://$(aws sts get-caller-identity --query Account --output text)/$AWS_REGION"
+pnpm deploy:dev
+```
+
+Follow the [example's seed step](https://github.com/tung-dnt/nestflow-js/blob/main/examples/lambda-order-state-machine/QUICK_START.md#5-seed-and-process-an-order) to create a pending order. Use the deployed `FunctionAliasArn` as `FUNCTION_ALIAS_ARN`. Run the following invocation instead of the quick start's invocation if you want the workflow to wait for an approval callback:
 
 ```bash
 aws lambda invoke \
   --function-name "$FUNCTION_ALIAS_ARN" \
   --invocation-type Event \
   --cli-binary-format raw-in-base64-out \
-  --payload '{"urn":"order-123","eventId":"order-created-001","initialEvent":"order.created"}' \
+  --payload '{"urn":"0195146b-1ab7-7dcd-9d26-60eb422f767d","eventId":"order-created-001","initialEvent":"order.created"}' \
   output.json
 ```
 
@@ -55,8 +65,8 @@ A worker can stop after a handler calls an external service but before the trans
 
 ## Remove the stack
 
-Destroying the example stack deletes its DynamoDB table and the stored orders and receipts:
+From `examples/lambda-order-state-machine`, destroy the dev stack. This deletes the DynamoDB table and the stored orders and receipts:
 
 ```bash
-bun run destroy -c stage=dev
+pnpm destroy
 ```

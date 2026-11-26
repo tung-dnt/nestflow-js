@@ -33,7 +33,7 @@ class OrderStack extends cdk.Stack {
     // Lambda Function with Durable Execution
     const fn = new lambda.Function(this, 'OrderWorkflowFunction', {
       functionName: `order-state-machine-${stage}-order-workflow`,
-      runtime: lambda.Runtime.NODEJS_22_X,
+      runtime: lambda.Runtime.NODEJS_26_X,
       handler: 'lambda.handler',
       code: lambda.Code.fromAsset('dist'),
       memorySize: 512,

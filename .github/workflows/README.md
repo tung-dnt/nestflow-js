@@ -1,61 +1,36 @@
 # GitHub Actions Workflows
 
-Automated CI/CD pipelines for nestjs-serverless-workflow package.
+## CI
 
-## 🔄 Workflows
+[`ci.yml`](ci.yml) runs on pushes and pull requests targeting `main` or `develop`.
+One job runs `pnpm check` and `pnpm test`, builds with `pnpm build`, then runs
+`pnpm verify:package` and `pnpm verify:lambda`. Every step must pass before CI
+uploads `dist/` as `build-output` for seven days.
 
-### 1. CI (`ci.yml`)
+## Release
 
-**Triggers**: Push to `main`/`develop`, Pull Requests
+[`release.yml`](release.yml) runs on pushes to `main`, except version bump commits,
+and on manual dispatch. It runs the same checks as CI before bumping the version,
+updating the changelog, committing, and tagging. It publishes with
+`npm publish --access public`, which rebuilds via `prepublishOnly`, and creates a
+GitHub release. Configure the `NPM_TOKEN` repository secret before publishing.
 
-**What it does**:
-- ✅ Type checking with TypeScript
-- ✅ Runs tests
-- ✅ Builds the package
-- ✅ Validates package.json
-- ✅ Checks package exports
-- ✅ Dry-run publish test
-- ✅ Uploads build artifacts
+To release manually, open **Actions → Release → Run workflow** and choose
+`patch`, `minor`, or `major`.
 
-**Status**: ![CI](https://github.com/tung-dnt/nestjs-serverless-workflow/workflows/CI/badge.svg)
+## Documentation deployment
 
-### 2. Publish (`publish.yml`)
+The release workflow deploys the docs to GitHub Pages after a successful release.
+[`deploy-docs.yml`](deploy-docs.yml) also runs after a successful release on
+`main` and deploys if `docs/` changed in the last five commits.
 
-**Triggers**: Push tags matching `v*` (e.g., `v0.0.2`)
+Both jobs use `pnpm --dir docs build` and upload `docs/out` to GitHub Pages.
 
-**What it does**:
-- ✅ Type checks the code
-- ✅ Builds the package
-- ✅ Publishes to NPM
-- ✅ Creates GitHub Release
-- ✅ Announces success
+## Toolchain
 
-**Usage**:
-```bash
-# Create and push tag
-git tag v0.0.2
-git push origin v0.0.2
-```
-
-**Status**: ![Publish](https://github.com/tung-dnt/nestjs-serverless-workflow/workflows/Publish%20to%20NPM/badge.svg)
-
-### 3. Release (`release.yml`)
-
-**Triggers**: Manual workflow dispatch
-
-**What it does**:
-- ✅ Bumps version (patch/minor/major)
-- ✅ Runs tests
-- ✅ Updates CHANGELOG.md
-- ✅ Commits version bump
-- ✅ Creates git tag
-- ✅ Publishes to NPM
-- ✅ Creates GitHub Release
-
-**Usage**:
-1. Go to: Actions → Release → Run workflow
-2. Select version type: `patch` / `minor` / `major`
-3. Click "Run workflow"
+All jobs that install dependencies use Node.js 24 and the pnpm version in the
+root `package.json` `packageManager` field. They run
+`pnpm install --frozen-lockfile` at the workspace root.
 
 ## 🔧 Setup Instructions
 
@@ -65,9 +40,9 @@ git push origin v0.0.2
 2. Click your profile → **Access Tokens**
 3. Click **Generate New Token** → **Granular Access Token**
 4. Configure:
-   - **Name**: `github-actions-nestjs-serverless-workflow`
+   - **Name**: `github-actions-nestflow-js`
    - **Expiration**: 1 year (or longer)
-   - **Packages and scopes**: Select packages → `nestjs-serverless-workflow`
+   - **Packages and scopes**: Select packages → `nestflow-js`
    - **Permissions**: **Read and write**
    - **Automation**: ✅ Enable (bypasses 2FA)
 5. Copy the token (starts with `npm_...`)
@@ -81,89 +56,6 @@ git push origin v0.0.2
 5. Value: Paste your npm token
 6. Click **Add secret**
 
-### Step 3: Verify Setup
-
-The workflows are now ready! Test by:
-
-```bash
-# Option 1: Push a tag
-git tag v0.0.2
-git push origin v0.0.2
-
-# Option 2: Use the Release workflow
-# Go to Actions → Release → Run workflow
-```
-
-## 📋 Workflow Details
-
-### Environment Variables
-
-All workflows use:
-- `NPM_TOKEN`: NPM authentication (from secrets)
-- `GITHUB_TOKEN`: Automatically provided by GitHub
-
-### Permissions
-
-Workflows have:
-- `contents: write` - Push commits and tags
-- `id-token: write` - NPM provenance
-
-### Build Process
-
-1. **Checkout code**
-2. **Setup Bun** (latest version)
-3. **Install dependencies** (`bun install --frozen-lockfile`)
-4. **Type check** (`bun run typecheck`)
-5. **Build** (`bun run build`)
-6. **Publish** (`npm publish --access public`)
-
-## 🚀 Publishing Flow
-
-### Automatic (Tag Push)
-
-```bash
-# 1. Bump version locally
-bun pm version patch  # or minor/major
-
-# 2. This creates a commit and tag automatically
-
-# 3. Push with tags
-git push origin main --tags
-
-# 4. GitHub Actions automatically publishes
-```
-
-### Manual (Release Workflow)
-
-1. Go to **Actions** tab
-2. Click **Release** workflow
-3. Click **Run workflow**
-4. Select version type
-5. Click **Run workflow** button
-6. Automation handles everything!
-
-### Semi-Automatic (CI → Tag → Publish)
-
-```bash
-# 1. Create a release branch
-git checkout -b release/v0.0.2
-
-# 2. Update version
-npm version patch --no-git-tag-version
-
-# 3. Update CHANGELOG.md
-
-# 4. Commit and push
-git add .
-git commit -m "chore: prepare release v0.0.2"
-git push origin release/v0.0.2
-
-# 5. Create PR and merge
-
-# 6. After merge, tag and push
-git tag v0.0.2
-git push origin v0.0.2
-```
 
 ## 🔍 Monitoring
 
@@ -175,13 +67,13 @@ Go to: **Actions** tab → Select workflow → View runs
 
 ```bash
 # View on NPM
-open https://www.npmjs.com/package/nestjs-serverless-workflow
+open https://www.npmjs.com/package/nestflow-js
 
 # Check version
-npm view nestjs-serverless-workflow version
+npm view nestflow-js version
 
 # Test installation
-npm install nestjs-serverless-workflow@latest
+npm install nestflow-js@latest
 ```
 
 ### Verify Release
@@ -209,8 +101,8 @@ npm whoami
 
 **Solution**: Run build locally first
 ```bash
-bun install
-bun run build
+pnpm install --frozen-lockfile
+pnpm build
 ```
 
 ### Issue: Tag already exists
@@ -232,10 +124,9 @@ git push origin :refs/tags/v0.0.2
 Add to README.md:
 
 ```markdown
-![CI](https://github.com/tung-dnt/nestjs-serverless-workflow/workflows/CI/badge.svg)
-![Publish](https://github.com/tung-dnt/nestjs-serverless-workflow/workflows/Publish%20to%20NPM/badge.svg)
-![npm version](https://img.shields.io/npm/v/nestjs-serverless-workflow.svg)
-![npm downloads](https://img.shields.io/npm/dm/nestjs-serverless-workflow.svg)
+![CI](https://github.com/tung-dnt/nestflow-js/actions/workflows/ci.yml/badge.svg)
+![npm version](https://img.shields.io/npm/v/nestflow-js.svg)
+![npm downloads](https://img.shields.io/npm/dm/nestflow-js.svg)
 ```
 
 ## 🔒 Security Best Practices
@@ -278,12 +169,12 @@ Update `CHANGELOG.md` before release:
 - [GitHub Actions Documentation](https://docs.github.com/en/actions)
 - [NPM Publishing Guide](https://docs.npmjs.com/packages-and-modules/contributing-packages-to-the-registry)
 - [Semantic Versioning](https://semver.org/)
-- [Bun Documentation](https://bun.sh/docs)
+- [pnpm Documentation](https://pnpm.io/)
 
 ## 🆘 Support
 
 For issues with workflows:
-- Check [Actions logs](https://github.com/tung-dnt/nestjs-serverless-workflow/actions)
+- Check [Actions logs](https://github.com/tung-dnt/nestflow-js/actions)
 - Review [workflow files](./)
-- Open an [issue](https://github.com/tung-dnt/nestjs-serverless-workflow/issues)
+- Open an [issue](https://github.com/tung-dnt/nestflow-js/issues)
 

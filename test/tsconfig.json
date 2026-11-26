@@ -1,11 +1,9 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "types": ["bun", "node"],
-    "baseUrl": "..",
+    "types": ["node"],
     "paths": {
-      "*": ["./*"],
-      "@/*": ["./packages/*"]
+      "@/*": ["../packages/*"]
     }
   },
   "include": ["**/*.ts"],

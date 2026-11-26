@@ -30,11 +30,11 @@ Be honest about the boundaries:
 
 - **NestJS-native** — decorators, modules, dependency injection. Workflows integrate with your existing NestJS app, not fight it. ([Workflow definition](/docs/concepts/workflow-definition))
 - **Declarative state machines** — define states, transitions, and conditions in a single `@Workflow` decorator. The engine enforces valid transitions at runtime. ([States & transitions](/docs/concepts/states-and-transitions))
-- **Auto-continuation** — workflows automatically chain through non-idle states. Define the transitions; the orchestrator handles the loop. ([TransitResult](/docs/api-reference/adapters#transitresult))
+- **Auto-continuation.** The orchestrator returns the next event for non-idle states with one matching transition. The adapter submits that event. ([TransitResult](/docs/api-reference/adapters#transitresult))
 - **Adapter pattern** — same workflow definition runs in HTTP controllers, Lambda handlers, or durable functions. Switch runtimes without rewriting business logic. ([Adapters](/docs/api-reference/adapters))
 - **Built-in retry** — `@WithRetry` with exponential backoff, jitter, and configurable strategies. `UnretriableException` for permanent failures. ([Retry guide](/docs/recipes/retry-and-error-handling))
 - **Schema-agnostic validation** — `@Payload(schema)` with a pluggable `PayloadValidator`. Use Zod, Joi, class-validator, or anything else. ([Decorators](/docs/api-reference/decorators))
-- **Zero runtime dependencies** — only peer dependencies on `@nestjs/common`, `@nestjs/core`, `reflect-metadata`, and `rxjs`. Subpath exports (`nestflow-js/core`, `nestflow-js/adapter`) for tree-shaking.
+- **No direct runtime dependencies.** Install the peer dependencies listed in the [quick start](/docs/quick-start#installation). Use subpath exports such as `nestflow-js/core` and `nestflow-js/adapter` to import what you need.
 - **Storage-agnostic** — implement the `IWorkflowEntity` interface with any database: DynamoDB, Prisma, TypeORM, in-memory. ([Interfaces](/docs/api-reference/interfaces))
 
 ## How It Works (30-Second Version)
@@ -47,13 +47,13 @@ sequenceDiagram
     participant Handler as @OnEvent Handler
     participant Entity as EntityService
 
-    Client->>Orchestrator: transit({ event, urn, payload })
-    Orchestrator->>Entity: load(urn)
-    Orchestrator->>Router: findValidTransition(event, state)
+    Client->>Orchestrator: transit({ event, urn, eventId, payload })
+    Orchestrator->>Entity: claimTransition(urn, eventId)
+    Orchestrator->>Router: findValidTransition(entity, payload)
     Router-->>Orchestrator: matched transition
     Orchestrator->>Handler: execute handler
     Handler-->>Orchestrator: return value
-    Orchestrator->>Entity: update(entity, newState)
+    Orchestrator->>Entity: commit state and receipt
     Orchestrator-->>Client: TransitResult (final | idle | continued | no_transition)
 ```
 
@@ -61,7 +61,6 @@ sequenceDiagram
 
 Planned features for future releases:
 
-- **Event bus** — built-in event publishing after state transitions (`nestflow-js/event-bus`)
 - **Additional adapters** — SQS-based Lambda adapter, Kafka consumer adapter
 - **Workflow visualization** — Mermaid diagram generation from workflow definitions
 - **Saga support** — distributed transaction patterns with compensation

@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'vite-plus/test';
 import { UnretriableException } from '@/exception/unretriable.exception';
 
 describe('UnretriableException', () => {

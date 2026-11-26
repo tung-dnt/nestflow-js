@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vite-plus/test';
 import { Test } from '@nestjs/testing';
 import { withDurableExecution, type DurableLambdaHandler } from '@aws/durable-execution-sdk-js';
 import { LocalDurableTestRunner, WaitingOperationStatus } from '@aws/durable-execution-sdk-js-testing';

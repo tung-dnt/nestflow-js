@@ -1,7 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { RouterService } from '@/core/providers/router.service';
 import type { IWorkflowDefinition, PayloadValidator } from '@/core/types';
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vite-plus/test';
 
 const mockEntityService = { status: (entity: { status: string }) => entity.status };
 

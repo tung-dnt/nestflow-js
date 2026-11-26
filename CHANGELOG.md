@@ -4,6 +4,8 @@
 - Retry only transient handler errors and persist terminal failure only after the last attempt.
 - Keep execution identity local to each run. Enforce global guards, support numeric state `0`, validate handlers at startup, and omit raw payloads from transition logs.
 - Require NestJS 12 and Node.js 22.12 or later.
+- Use Node.js 26 and pnpm for development and CI, with Vite+ for checks and tests. Run the Lambda example on Node.js 26.
+- Remove the stale `nestflow-js/event-bus` export and verify package imports from the packed archive.
 
 ## v0.1.15
 
