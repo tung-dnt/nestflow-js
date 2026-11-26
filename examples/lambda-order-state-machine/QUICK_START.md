@@ -108,7 +108,7 @@ pnpm start
 
 ```bash
 # Development
-pnpm build                # Compile TypeScript and bundle the Lambda handler
+pnpm build                # Type-check the example and bundle the Lambda handler
 pnpm start                # Start the local NestJS application
 
 # Deployment

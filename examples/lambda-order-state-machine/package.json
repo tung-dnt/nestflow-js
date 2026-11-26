@@ -8,16 +8,15 @@
   "type": "module",
   "main": "dist/lambda.mjs",
   "scripts": {
-    "compile": "tsc -p tsconfig.build.json",
-    "build": "pnpm run compile && node scripts/build.mjs",
+    "build": "pnpm run typecheck && vp pack",
     "synth": "pnpm run build && cdk synth",
     "deploy": "pnpm run build && cdk deploy",
     "deploy:dev": "pnpm run build && cdk deploy -c stage=dev",
     "deploy:prod": "pnpm run build && cdk deploy -c stage=prod",
     "diff": "pnpm run build && cdk diff",
     "destroy": "pnpm run build && cdk destroy",
-    "start": "pnpm run compile && node --env-file-if-exists=.env .build/src/main.js",
-    "typecheck": "tsc --noEmit",
+    "start": "vpx --env-file-if-exists=.env ./src/main.ts",
+    "typecheck": "vp check --no-fmt --no-lint src infra vite.config.ts",
     "verify:lambda": "pnpm run build && node scripts/verify-lambda.mjs"
   },
   "dependencies": {
@@ -40,9 +39,7 @@
     "@types/node": "22.20.7",
     "aws-cdk": "2.1149.0",
     "aws-cdk-lib": "^2.180.0",
-    "constructs": "^10.4.0",
-    "esbuild": "0.28.2",
-    "typescript": "5.9.3"
+    "constructs": "^10.4.0"
   },
   "engines": {
     "node": ">=26"

@@ -73,10 +73,16 @@ To exercise order storage with DynamoDB Local, set `DYNAMODB_ENDPOINT` to the lo
 
 ### Build the Lambda bundle
 
-The build compiles TypeScript, then uses esbuild to bundle the handler as `dist/lambda.mjs`.
+`pnpm build` type-checks the example with Vite Plus, then bundles the handler and its runtime dependencies into `dist/lambda.mjs`. CDK deploys the contents of `dist`. The local server and the CDK app run directly from TypeScript.
 
 ```bash
 pnpm build
+```
+
+To check that the handler loads without the workspace's `node_modules`, run:
+
+```bash
+pnpm run verify:lambda
 ```
 
 ### Preview Changes
@@ -167,7 +173,7 @@ Receipt keys use `transition#` and a hash of the order ID and event ID. They do 
 
 ### History and recovery outside Durable Lambda
 
-The `WorkflowRecords` index lists committed history by order. `OrderEntityService.listTransitions()` returns metadata, not request payloads. Authorize the order before calling it. Index reads are eventually consistent, and older receipts are not backfilled.
+Set `WORKFLOW_HISTORY=true` to register the history reader. The `WorkflowRecords` index then lists committed history by order. `OrderEntityService.listTransitions()` returns metadata, not request payloads. Authorize the order before calling it. Index reads are eventually consistent, and older receipts are not backfilled. Recovery does not require history or telemetry.
 
 For a broker or server using this store, set `WORKFLOW_RECOVERY=true` for dispatchers. Do not enable it for the Durable Lambda example, which already owns continuation. Run the exported `recoverNextTransition()` in a host worker:
 
@@ -184,6 +190,14 @@ await recoverNextTransition(orchestrator, orderEntityService, async (result) => 
 The publisher must resolve only after the broker durably accepts the event. Preserve the event ID on delivery. If the worker dies before acknowledgement, another worker can take over after the lease expires; duplicate delivery is possible. Run the worker periodically, back off on failures, and alert on repeated errors. Use the outbox as the only continuation publisher when enabled. Idle and ambiguous transitions still need an external event; this worker does not create timers or callback registrations.
 
 Recovery evaluates continuation guards against the saved receipt with the currently deployed workflow definition. Keep those guards pure. Drain pending records before deploying incompatible transition definitions. The sample uses one pending-work partition; shard it if throughput exceeds a single DynamoDB partition.
+
+### Cancel at a transition boundary
+
+Call `await orchestrator.requestCancellation(OrderEvent.CREATED, orderId)` from an authorized host. The event selects the workflow's entity provider; it is not dispatched. A repeated request returns `true` for an existing order. `false` means no order exists.
+
+Cancellation leaves the business state unchanged. A handler with an existing claim can finish and commit. New claims fail with `WorkflowCancelledException`. An outbox worker drops cancelled work when it claims it. A message published before the worker sees cancellation may still be delivered, but it cannot acquire a new transition claim. For broker consumers, treat `WorkflowCancelledException` as terminal, not as a retryable conflict.
+
+This does not interrupt a running handler, undo an external effect, or wake Durable Lambda callback waits. It applies to the entity across deliveries and executions, not just to one invocation.
 
 ## Project Structure
 
