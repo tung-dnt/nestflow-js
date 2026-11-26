@@ -112,6 +112,8 @@ import { OrderEntityService } from './order-entity.service.js';
 export class OrderModule {}
 ```
 
+To validate `@Payload(schema)`, install the plugin for your schema library and register its exported function as `payloadValidator`. For example, install `@nestflow-js/validator-zod` and `zod`, then set `payloadValidator: zodPayloadValidator`. See the [four validator plugins](docs/content/docs/api-reference/interfaces.mdx#payloadvalidator).
+
 ## Migrating to transition claims
 
 This is a breaking change. Upgrade event producers and entity services together.

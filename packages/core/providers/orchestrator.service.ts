@@ -237,7 +237,7 @@ export class OrchestratorService implements OnModuleInit {
           throw new BadRequestException(`No matched transition for event: ${event}, status: ${state}`);
         }
 
-        const args = router.buildParamDecorators(entity, payload, instance, handlerName, eventId);
+        const args = await router.buildParamDecorators(entity, payload, instance, handlerName, eventId);
         let completion: TransitionCompletion;
         let handlerFailure: { cause: unknown } | undefined;
         try {

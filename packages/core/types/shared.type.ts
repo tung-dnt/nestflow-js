@@ -34,23 +34,14 @@ export interface Duration {
  *
  * @param schema - The schema object passed to `@Payload(schema)` by the handler author.
  * @param payload - The raw incoming payload to validate.
- * @returns The validated (and possibly transformed) payload. This value replaces
- *   the raw payload in the handler's arguments.
+ * @returns The validated (and possibly transformed) payload, or a promise for it.
+ *   The handler receives the resolved value.
  * @throws Should throw if validation fails — the framework wraps the error in a
  *   `BadRequestException`.
  *
  * @example
  * ```typescript
- * // Zod
- * const payloadValidator: PayloadValidator = (schema, payload) =>
- *   (schema as z.ZodSchema).parse(payload);
- *
- * // Joi
- * const payloadValidator: PayloadValidator = (schema, payload) => {
- *   const { value, error } = (schema as Joi.Schema).validate(payload);
- *   if (error) throw error;
- *   return value;
- * };
+ * WorkflowModule.register({ entities, workflows, payloadValidator: standardSchemaPayloadValidator });
  * ```
  */
 export type PayloadValidator = (schema: unknown, payload: unknown) => unknown;

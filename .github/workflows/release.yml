@@ -64,9 +64,6 @@ jobs:
       - name: 🏗️ Build package
         run: pnpm build
 
-      - name: Verify the packed package
-        run: pnpm verify:package
-
       - name: Verify the Lambda artifact
         run: pnpm verify:lambda
 
@@ -88,6 +85,7 @@ jobs:
           NEW_VERSION="v$(jq -r '.version' package.json)"
           echo "🏷️ New version: $NEW_VERSION"
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          pnpm --filter '@nestflow-js/validator-*' exec npm pkg set "version=${NEW_VERSION#v}" --workspaces=false
           echo "version_number=${NEW_VERSION#v}" >> $GITHUB_OUTPUT
 
           # Capture changelog content for GitHub Release body
@@ -96,9 +94,12 @@ jobs:
           echo "$CHANGELOG_CONTENT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+      - name: Verify core and validator npm tarballs at the release version
+        run: pnpm verify:package
+
       - name: 💾 Commit version bump
         run: |
-          git add package.json CHANGELOG.md
+          git add package.json packages/validator/*/package.json CHANGELOG.md
           git commit -m "chore: bump version to ${{ steps.version.outputs.new_version }}"
           git tag ${{ steps.version.outputs.new_version }}
 
@@ -108,7 +109,9 @@ jobs:
           git push origin ${{ steps.version.outputs.new_version }}
 
       - name: 📤 Publish to NPM
-        run: npm publish --access public
+        run: |
+          npm publish --access public
+          pnpm --filter '@nestflow-js/validator-*' publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

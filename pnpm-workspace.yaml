@@ -1,5 +1,6 @@
 packages:
   - docs
+  - packages/validator/*
   - examples/lambda-order-state-machine
 
 allowBuilds:

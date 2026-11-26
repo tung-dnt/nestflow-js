@@ -102,7 +102,13 @@ export class RouterService<T, Event, State> {
    * argument array for the handler method. Falls back to the legacy
    * `{ entity, payload }` shape when no decorator metadata is present.
    */
-  buildParamDecorators(entity: T, payload: unknown, target: object, propertyKey: string | symbol, eventId: string) {
+  async buildParamDecorators(
+    entity: T,
+    payload: unknown,
+    target: object,
+    propertyKey: string | symbol,
+    eventId: string,
+  ) {
     // Metadata is stored on the prototype when decorators are applied
     const prototype = target.constructor?.prototype || target;
     const paramsMeta: Array<{ index: number; type: string; dto?: unknown }> =
@@ -113,7 +119,7 @@ export class RouterService<T, Event, State> {
       // populate args according to metadata indices
       for (const meta of paramsMeta) {
         if (meta.type === 'entity') args[meta.index] = entity;
-        else if (meta.type === 'payload') args[meta.index] = this.validatePayload(meta.dto, payload);
+        else if (meta.type === 'payload') args[meta.index] = await this.validatePayload(meta.dto, payload);
         else if (meta.type === 'eventId') args[meta.index] = eventId;
         else args[meta.index] = undefined;
       }
@@ -125,10 +131,10 @@ export class RouterService<T, Event, State> {
   }
 
   /** Validate and optionally transform the payload using the user-supplied validator. */
-  private validatePayload(dto: unknown, payload: unknown): unknown {
-    if (!dto || !this.payloadValidator) return payload;
+  private async validatePayload(dto: unknown, payload: unknown): Promise<unknown> {
+    if (dto === undefined || !this.payloadValidator) return payload;
     try {
-      return this.payloadValidator(dto, payload);
+      return await this.payloadValidator(dto, payload);
     } catch (error) {
       throw new BadRequestException(
         `Payload validation failed: ${error instanceof Error ? error.message : String(error)}`,

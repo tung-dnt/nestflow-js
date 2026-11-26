@@ -25,6 +25,9 @@ Use Node.js 26 at the version pinned in [`.node-version`](.node-version). Use pn
    pnpm build
    ```
 
+To enable the pre-commit hook, run `pnpm exec vp hooks enable` once per clone.
+The hook runs `pnpm check` against your working tree and blocks the commit if the check fails.
+
 Run `pnpm --dir docs dev` from the repository root to preview the docs.
 
 ## Project Structure
@@ -34,6 +37,7 @@ nestflow-js/
 ├── packages/               # Library source
 │   ├── core/              # Core workflow module
 │   ├── adapter/           # Runtime adapters
+│   ├── validator/         # Independently installable npm plugins, one workspace per schema library
 │   └── exception/         # Custom exceptions
 ├── test/                   # Test files
 ├── examples/              # Example implementations
@@ -137,13 +141,13 @@ Types:
 
 ### Building
 
-Build the ESM package and TypeScript declarations with:
+Run Vite+ Pack to build the library and all four validator packages, including their TypeScript declarations:
 
 ```bash
 pnpm build
 ```
 
-Output structure:
+Public library entry points:
 ```
 dist/
 ├── core/

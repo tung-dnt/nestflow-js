@@ -26,7 +26,7 @@ export function Entity(): ParameterDecorator {
  * {@link IWorkflowEvent}, or from the return value of the previous handler
  * when auto-transitioning (`continued` status).
  *
- * @param dto - Optional DTO class for validation (reserved for future use).
+ * @param dto - Optional schema passed to the module's registered payload validator.
  *
  * @example
  * ```typescript

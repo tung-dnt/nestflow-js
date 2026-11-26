@@ -1,0 +1,30 @@
+{
+  "name": "@nestflow-js/validator-joi",
+  "version": "0.1.15",
+  "description": "Joi payload validation for nestflow-js workflow handlers",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tung-dnt/nestflow-js.git",
+    "directory": "packages/validator/joi"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "joi": "^18.0.0"
+  }
+}
