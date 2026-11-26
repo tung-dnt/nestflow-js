@@ -1,3 +1,5 @@
+import type { TransitionCommitMetadata } from './workflow-recovery.interface';
+
 export type TransitionCompletion =
   | { kind: 'applied'; output: unknown }
   | { kind: 'unretriable' }
@@ -15,7 +17,11 @@ export type TransitionClaim<T, State> =
   | {
       kind: 'acquired';
       entity: T;
-      commit(state: State, completion: TransitionCompletion): Promise<TransitionReceipt<T>>;
+      commit(
+        state: State,
+        completion: TransitionCompletion,
+        metadata: TransitionCommitMetadata,
+      ): Promise<TransitionReceipt<T>>;
       release(): Promise<void>;
     };
 

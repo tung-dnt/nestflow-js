@@ -51,6 +51,22 @@ Returns a `DynamicModule` that can be imported into your NestJS module.
 export class OrderModule {}
 ```
 
+## Transition telemetry
+
+Implement `WorkflowTelemetry` and register the plugin under `WORKFLOW_TELEMETRY` from `nestflow-js/core`:
+
+```typescript
+WorkflowModule.register({
+  entities,
+  workflows,
+  providers: [{ provide: WORKFLOW_TELEMETRY, useClass: MyTelemetryPlugin }],
+});
+```
+
+You can also import a Nest module that exports the token. Without a provider, no plugin telemetry is sent.
+
+`log()` receives structured facts such as a commit, receipt replay, or retry request. `trace()` receives one completed attempt with its start time, duration, and result. These records omit payloads, entity IDs, and raw errors. The orchestrator does not await the provider or pass it control of dispatch. A host that needs an active span around downstream calls can open it at the dispatch boundary.
+
 ## Architecture
 
 ```mermaid

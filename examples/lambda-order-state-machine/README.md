@@ -165,6 +165,26 @@ The lease uses client timestamps. The transaction rejects a prior owner after ta
 
 Receipt keys use `transition#` and a hash of the order ID and event ID. They do not include either raw ID. Each receipt stores the committed order snapshot and terminal outcome, including the return value on success. Keep handler results JSON-compatible and small. The snapshot, result, and attribute overhead must fit within DynamoDB's 400 KB limit per item. The sample does not expire receipts. Keep them at least as long as events can be redelivered or replayed. Deleting a receipt earlier removes deduplication for that event.
 
+### History and recovery outside Durable Lambda
+
+The `WorkflowRecords` index lists committed history by order. `OrderEntityService.listTransitions()` returns metadata, not request payloads. Authorize the order before calling it. Index reads are eventually consistent, and older receipts are not backfilled.
+
+For a broker or server using this store, set `WORKFLOW_RECOVERY=true` for dispatchers. Do not enable it for the Durable Lambda example, which already owns continuation. Run the exported `recoverNextTransition()` in a host worker:
+
+```ts
+import { recoverNextTransition } from 'nestflow-js/adapter';
+
+await recoverNextTransition(orchestrator, orderEntityService, async (result) => {
+  if (result.status === 'continued') {
+    await broker.publish(result.nextEvent);
+  }
+});
+```
+
+The publisher must resolve only after the broker durably accepts the event. Preserve the event ID on delivery. If the worker dies before acknowledgement, another worker can take over after the lease expires; duplicate delivery is possible. Run the worker periodically, back off on failures, and alert on repeated errors. Use the outbox as the only continuation publisher when enabled. Idle and ambiguous transitions still need an external event; this worker does not create timers or callback registrations.
+
+Recovery evaluates continuation guards against the saved receipt with the currently deployed workflow definition. Keep those guards pure. Drain pending records before deploying incompatible transition definitions. The sample uses one pending-work partition; shard it if throughput exceeds a single DynamoDB partition.
+
 ## Project Structure
 
 ```

@@ -14,10 +14,25 @@ import {
   type TransitionReceipt,
 } from '@/core';
 import { UnretriableException } from '@/exception/unretriable.exception';
-import { BadRequestException, ConflictException, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  Logger,
+  Optional,
+  type OnModuleInit,
+} from '@nestjs/common';
 import { DiscoveryService, ModuleRef } from '@nestjs/core';
 import { createHash } from 'node:crypto';
 import type { IWorkflowEvent } from '../types/workflow-event.interface';
+import {
+  WORKFLOW_TELEMETRY,
+  type TransitionTelemetryContext,
+  type TransitionTrace,
+  type WorkflowTelemetry,
+} from '../types/workflow-telemetry.interface';
+import type { TransitionCommitMetadata } from '../types/workflow-recovery.interface';
 import { StateRouterHelperFactory } from './router.factory';
 
 function transitionFailure(message: string, cause: unknown, storageError: unknown): AggregateError {
@@ -43,6 +58,7 @@ export class OrchestratorService implements OnModuleInit {
     private readonly discoveryService: DiscoveryService,
     private readonly routerHelperFactory: StateRouterHelperFactory,
     private readonly moduleRef: ModuleRef,
+    @Optional() @Inject(WORKFLOW_TELEMETRY) private readonly telemetry?: WorkflowTelemetry,
   ) {}
 
   onModuleInit() {
@@ -125,12 +141,47 @@ export class OrchestratorService implements OnModuleInit {
   transitAttempt(params: IWorkflowEvent, canRetry: false): Promise<TransitResult>;
   transitAttempt(params: IWorkflowEvent, canRetry: boolean): Promise<TransitResult | { status: 'retry' }>;
   async transitAttempt(params: IWorkflowEvent, canRetry: boolean): Promise<TransitResult | { status: 'retry' }> {
+    const route = this.routes.get(params.event);
+    const telemetry = this.telemetry;
+    if (!telemetry) return this.executeAttempt(params, canRetry, route);
+
+    const context = route && { workflow: route.definition.name, event: params.event, attempt: params.attempt };
+    const startedAtMs = Date.now();
+    const start = performance.now();
+    let outcome: TransitionTrace['outcome'] = 'error';
+    try {
+      const result = await this.executeAttempt(params, canRetry, route, context);
+      outcome = result.status;
+      if (context && outcome === 'retry') {
+        this.sendTelemetry(() => telemetry.log({ ...context, kind: 'retry_requested' }));
+      }
+      return result;
+    } finally {
+      const durationMs = performance.now() - start;
+      this.sendTelemetry(() => telemetry.trace({ ...context, startedAtMs, durationMs, outcome }));
+    }
+  }
+
+  private sendTelemetry(send: () => void | Promise<void>): void {
+    try {
+      const pending = send();
+      if (pending) void pending.catch(() => {});
+    } catch {
+      // Telemetry cannot change a workflow outcome.
+    }
+  }
+
+  private async executeAttempt(
+    params: IWorkflowEvent,
+    canRetry: boolean,
+    route: IWorkflowDefaultRoute | undefined,
+    context?: TransitionTelemetryContext,
+  ): Promise<TransitResult | { status: 'retry' }> {
     const { urn, payload, event, eventId } = params;
     if (typeof eventId !== 'string' || !eventId.trim()) {
       throw new BadRequestException('A stable workflow eventId is required');
     }
 
-    const route = this.routes.get(event);
     if (!route) throw new BadRequestException(`No workflow found for event: ${event}`);
     const { definition, instance, defaultHandler, entityService, handlerName, handler } = route;
     const logger = new Logger(`Router::${definition.name}`);
@@ -139,11 +190,18 @@ export class OrchestratorService implements OnModuleInit {
 
     const claim = await entityService.claimTransition(urn, eventId);
     if (claim.kind === 'missing') throw new BadRequestException('Entity not found', String(urn));
-    if (claim.kind === 'busy') throw new ConflictException(`Entity ${urn} already has a transition in progress`);
+    if (claim.kind === 'busy') {
+      if (context) this.sendTelemetry(() => this.telemetry?.log({ ...context, kind: 'claim_busy' }));
+      throw new ConflictException(`Entity ${urn} already has a transition in progress`);
+    }
 
     let receipt: TransitionReceipt<unknown>;
     if (claim.kind === 'completed') {
       receipt = claim.receipt;
+      if (context) {
+        const outcome = receipt.completion.kind;
+        this.sendTelemetry(() => this.telemetry?.log({ ...context, kind: 'receipt_replayed', outcome }));
+      }
     } else {
       const { entity } = claim;
       let committed = false;
@@ -182,15 +240,31 @@ export class OrchestratorService implements OnModuleInit {
           handlerFailure = { cause };
         }
 
+        const targetState = completion.kind === 'applied' ? transition.to : definition.states.failed;
         try {
-          receipt = await claim.commit(
-            completion.kind === 'applied' ? transition.to : definition.states.failed,
-            completion,
-          );
+          receipt = await claim.commit(targetState, completion, {
+            workflow: definition.name,
+            event,
+            eventId,
+            urn,
+            from: state,
+          });
           committed = true;
         } catch (error) {
+          if (context) this.sendTelemetry(() => this.telemetry?.log({ ...context, kind: 'commit_unconfirmed' }));
           if (!handlerFailure) throw error;
           throw transitionFailure('Could not record workflow handler failure', handlerFailure.cause, error);
+        }
+        if (context) {
+          this.sendTelemetry(() =>
+            this.telemetry?.log({
+              ...context,
+              kind: 'transition_committed',
+              from: state,
+              to: targetState,
+              outcome: completion.kind,
+            }),
+          );
         }
         logger.log('Workflow transition committed', { urn, eventId, outcome: completion.kind });
         if (completion.kind === 'exhausted') throw handlerFailure?.cause;
@@ -209,6 +283,24 @@ export class OrchestratorService implements OnModuleInit {
       }
     }
 
+    return this.resolveReceipt({ event, eventId, urn }, route, receipt);
+  }
+
+  /** Resolve committed work from a trusted storage provider without running the original handler. */
+  resumeCommitted(transition: TransitionCommitMetadata, receipt: TransitionReceipt<unknown>): TransitResult {
+    const route = this.routes.get(transition.event);
+    if (!route || route.definition.name !== transition.workflow) {
+      throw new Error(`Cannot resume committed event ${transition.event} in workflow ${transition.workflow}`);
+    }
+    return this.resolveReceipt(transition, route, receipt);
+  }
+
+  private resolveReceipt(
+    { event, eventId, urn }: Pick<IWorkflowEvent, 'event' | 'eventId' | 'urn'>,
+    { definition, entityService }: IWorkflowDefaultRoute,
+    receipt: TransitionReceipt<unknown>,
+  ): TransitResult {
+    const router = this.routerHelperFactory.create(event, entityService, definition);
     const { entity, completion } = receipt;
     const state = entityService.status(entity);
     if (completion.kind === 'exhausted') throw new Error(`Workflow handler retry budget exhausted for event: ${event}`);
