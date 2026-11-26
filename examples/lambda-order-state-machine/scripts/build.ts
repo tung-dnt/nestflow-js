@@ -1,6 +1,5 @@
 import { $, build } from 'bun';
 
-
 await $`rm -rf dist`;
 
 const optionalRequirePackages = [
@@ -11,9 +10,6 @@ const optionalRequirePackages = [
   '@nestjs/platform-express',
   '@nestjs/websockets/socket-module',
   '@nestjs/websockets',
-  '@nestjs/microservices',
-  '@aws-sdk/client-dynamodb',
-  '@aws-sdk/lib-dynamodb',
   'amqp-connection-manager',
   'amqplib',
   'cache-manager',
@@ -32,7 +28,8 @@ const result = await build({
   outdir: './dist',
   target: 'node',
   external: optionalRequirePackages,
-  splitting: true,
+  format: 'esm',
+  naming: '[name].mjs',
 });
 
 if (!result.success) {

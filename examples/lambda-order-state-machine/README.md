@@ -21,6 +21,8 @@ Complete AWS Lambda example demonstrating the `nestflow-js` library with Durable
 
 ## Installation
 
+Use Node.js 22.12 or later and NestJS 12. The build emits `dist/lambda.mjs`, so Lambda can load the handler without experimental module flags.
+
 Run these commands from the repository root. The example uses `file:../..` to install the library from this checkout, not the published package. Build the library before installing the example dependencies.
 
 ```bash
