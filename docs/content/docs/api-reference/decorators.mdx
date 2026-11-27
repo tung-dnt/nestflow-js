@@ -153,7 +153,7 @@ Injects `IWorkflowEvent.eventId` as a `string`. The ID stays the same across ret
 
 ## @WithRetry
 
-Attaches handler retry configuration for adapters. The Durable Lambda adapter reads it. Calling `OrchestratorService.transit()` directly runs one attempt regardless of this configuration.
+Attaches handler retry configuration for adapters. The Durable Lambda adapter reads it. Subscribing to `OrchestratorService.transit()` directly runs one attempt regardless of this configuration.
 
 ```typescript
 import { WithRetry, RetryStrategy } from 'nestflow-js/core';

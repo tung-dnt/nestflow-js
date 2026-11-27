@@ -1,3 +1,4 @@
+import { type Observable, defer, of } from 'rxjs';
 import { Injectable } from '@nestjs/common';
 import { InMemoryWorkflowEntity } from '../../fixtures/in-memory-workflow-entity';
 
@@ -33,14 +34,16 @@ export class SubscriptionEntityService extends InMemoryWorkflowEntity<Subscripti
     super('status');
   }
 
-  async create(): Promise<Subscription> {
-    const subscription: Subscription = {
-      id: `sub-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      status: SubscriptionState.TRIAL,
-      userId: `user-${Math.random().toString(36).substr(2, 9)}`,
-      planId: 'plan-basic',
-      createdAt: new Date().toISOString(),
-    };
-    return this.save(subscription);
+  create(): Observable<Subscription> {
+    return defer(() => {
+      const subscription: Subscription = {
+        id: `sub-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        status: SubscriptionState.TRIAL,
+        userId: `user-${Math.random().toString(36).substr(2, 9)}`,
+        planId: 'plan-basic',
+        createdAt: new Date().toISOString(),
+      };
+      return of(this.save(subscription));
+    });
   }
 }

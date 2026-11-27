@@ -59,7 +59,7 @@ Transitions declare how entities move between states in response to events:
 
 ## How Transitions Are Resolved
 
-When `orchestrator.transit()` is called:
+When a caller subscribes to the Observable returned by `orchestrator.transit()`:
 
 1. Look up the workflow by event name.
 2. Claim the transition for the entity and event ID. If the service returns a receipt, skip the handler and use the receipt to resolve the result.

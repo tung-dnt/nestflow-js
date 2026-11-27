@@ -73,14 +73,15 @@ Use `transit()` to process a single event. Use the producer's stable ID for `eve
 
 ```typescript
 import type { OrchestratorService } from 'nestflow-js/core';
+import { firstValueFrom } from 'rxjs';
 
 function initiatePayment(orchestrator: OrchestratorService, paymentId: string, eventId: string) {
-	return orchestrator.transit({
+	return firstValueFrom(orchestrator.transit({
 		urn: paymentId,
 		event: 'payment.initiated',
 		eventId,
 		attempt: 0,
-	});
+	}));
 }
 ```
 

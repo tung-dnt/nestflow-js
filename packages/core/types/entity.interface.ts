@@ -1,3 +1,4 @@
+import type { Observable } from 'rxjs';
 import type { TransitionCommitMetadata, WorkflowCancellationStore } from './workflow-recovery.interface';
 
 export type TransitionCompletion =
@@ -23,11 +24,11 @@ export type TransitionClaim<T, State> =
         completion: TransitionCompletion,
         metadata: TransitionCommitMetadata,
         recordHistory?: true,
-      ): Promise<TransitionReceipt<T>>;
-      release(): Promise<void>;
+      ): Observable<TransitionReceipt<T>>;
+      release(): Observable<void>;
     };
 
-/** Persistence contract for entities and atomic workflow transition receipts. */
+/** Persistence for entities and atomic receipts. Operations are cold and emit once, including `undefined` for void. */
 export interface IWorkflowEntity<T = any, State = string | number> {
   /** When configured, new claims must atomically reject cancelled entities. */
   cancellation?: WorkflowCancellationStore;
@@ -36,7 +37,7 @@ export interface IWorkflowEntity<T = any, State = string | number> {
    * Creates a new instance of the entity
    * @returns A new entity instance
    */
-  create(): Promise<T>;
+  create(): Observable<T>;
 
   /**
    * Updates the status of an entity
@@ -44,14 +45,14 @@ export interface IWorkflowEntity<T = any, State = string | number> {
    * @param status The new status
    * @returns The updated entity
    */
-  update(entity: T, status: State): Promise<T>;
+  update(entity: T, status: State): Observable<T>;
 
   /**
    * Loads an entity by its URN
    * @param urn The unique resource name of the entity
    * @returns The loaded entity
    */
-  load(urn: string | number): Promise<T | null>;
+  load(urn: string | number): Observable<T | null>;
 
   /**
    * Atomically claim exclusive execution for an entity, or return the receipt
@@ -59,7 +60,7 @@ export interface IWorkflowEntity<T = any, State = string | number> {
    * receipt together, and release the claim. Release may only clear its own
    * claim. A prior owner cannot commit after another worker acquires it.
    */
-  claimTransition(urn: string | number, eventId: string): Promise<TransitionClaim<T, State>>;
+  claimTransition(urn: string | number, eventId: string): Observable<TransitionClaim<T, State>>;
 
   /**
    * Gets the current status of an entity

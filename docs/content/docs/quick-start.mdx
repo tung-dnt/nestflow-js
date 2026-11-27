@@ -10,7 +10,7 @@ Run a complete order workflow in one Node process. This example uses an in-memor
 Use NestJS 12 with Node.js 22.12 or later. See the [NestJS 12 migration guide](https://docs.nestjs.com/migration-guide).
 
 ```bash
-pnpm add nestflow-js @nestjs/common@12 @nestjs/core@12 class-transformer@^0.5.1 class-validator@^0.14.2 reflect-metadata@^0.2.0 rxjs@^7.8.0
+pnpm add nestflow-js @nestjs/common@12 @nestjs/core@12 reflect-metadata@^0.2.0 rxjs@^7.8.0
 ```
 
 The TypeScript examples use ESM (`"type": "module"` in `package.json` and `"module": "NodeNext"` in `tsconfig.json`). Enable `experimentalDecorators` and `emitDecoratorMetadata` in `tsconfig.json`.
@@ -40,6 +40,7 @@ Create `order-entity.service.ts`. The adapter owns claims and receipts. Your ser
 ```typescript
 import { randomUUID } from 'node:crypto';
 import { InMemoryWorkflowEntity } from 'nestflow-js/adapter';
+import { defer, of, type Observable } from 'rxjs';
 import { OrderStatus, type Order } from './order.js';
 
 export class OrderEntityService extends InMemoryWorkflowEntity<Order, 'status'> {
@@ -47,8 +48,8 @@ export class OrderEntityService extends InMemoryWorkflowEntity<Order, 'status'> 
 		super('status');
 	}
 
-	async create(): Promise<Order> {
-		return this.save({ id: randomUUID(), status: OrderStatus.Pending });
+	create(): Observable<Order> {
+		return defer(() => of(this.save({ id: randomUUID(), status: OrderStatus.Pending })));
 	}
 }
 ```
@@ -129,18 +130,19 @@ import { NestFactory } from '@nestjs/core';
 import { runInProcess } from 'nestflow-js/adapter';
 import type { OrderEntityService } from './order-entity.service.js';
 import { OrchestratorService } from 'nestflow-js/core';
+import { firstValueFrom } from 'rxjs';
 import { OrderModule } from './order.module.js';
 
 const app = await NestFactory.createApplicationContext(OrderModule);
 try {
 	const orchestrator = app.get(OrchestratorService);
-	const order = await app.get<OrderEntityService>('entity.order').create();
-	const result = await runInProcess(orchestrator, {
+	const order = await firstValueFrom(app.get<OrderEntityService>('entity.order').create());
+	const result = await firstValueFrom(runInProcess(orchestrator, {
 		event: 'order.submit',
 		urn: order.id,
 		eventId: 'submit-command-456',
 		attempt: 0,
-	});
+	}));
 	console.log(result);
 } finally {
 	await app.close();

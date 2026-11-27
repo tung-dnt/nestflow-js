@@ -71,7 +71,7 @@ You can also import a Nest module that exports the token. Without a provider, no
 
 Register a `WorkflowHistoryReader` under `WORKFLOW_HISTORY` to opt into committed history. When the token is present, the orchestrator asks the entity provider to record history as part of the receipt commit. It does not call the reader on the write path. Leave the token unregistered to skip history. Telemetry and outbox recovery work independently of history.
 
-An entity provider that exposes `cancellation` can accept `orchestrator.requestCancellation(event, urn)`. The `event` selects the workflow's entity provider. Requests are idempotent and must be authorized by the host. A cancelled entity rejects new claims with `WorkflowCancelledException` from `nestflow-js/exception`. An already claimed transition can finish, but once cancellation is observed the orchestrator does not return a continuation and the recovery worker discards pending work.
+Subscribe to `orchestrator.requestCancellation(event, urn)` to persist a stop request when the entity provider exposes `cancellation`. The `event` selects the workflow's entity provider. Requests are idempotent and must be authorized by the host. A cancelled entity rejects new claims with `WorkflowCancelledException` from `nestflow-js/exception`. An already claimed transition can finish, but once cancellation is observed the orchestrator does not emit a continuation and the recovery worker discards pending work.
 
 ## Architecture
 

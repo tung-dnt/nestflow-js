@@ -6,7 +6,7 @@ description: Execution, transport, and recovery contracts for Node services, mes
 
 ## TransitResult
 
-On success, `orchestrator.transit()` returns a `TransitResult`. It runs one attempt and does not schedule retries.
+`orchestrator.transit()` returns a cold Observable that emits one `TransitResult` on success. It runs one attempt per subscription and does not schedule retries.
 
 ### Type Definition
 
@@ -31,13 +31,13 @@ Use the [`IWorkflowEvent`](/docs/api-reference/interfaces#iworkflowevent) envelo
 
 ## Node and message workers
 
-Import these functions from `nestflow-js/adapter`. They use the same registered Nest `OrchestratorService` as the Lambda adapter.
+Import these functions from `nestflow-js/adapter`. They return cold, single-result Observables and use the same registered Nest `OrchestratorService` as the Lambda adapter.
 
 - `runInProcess(orchestrator, event)` follows automatic continuations. It returns when the result is `final`, `idle`, or `no_transition`. To resume a paused workflow, submit a new event for the same entity.
 - `processWorkflowMessage(orchestrator, raw)` validates the decoded workflow envelope and executes one logical transition, including configured handler retries. It returns the result without publishing or acknowledging a message.
-- `recoverNextTransition(orchestrator, store, deliver)` claims a pending committed transition and derives its result without calling the original handler. It acknowledges the claim only after `deliver(result)` resolves. It returns `false` when the store offers no work.
+- `recoverNextTransition(orchestrator, store, deliver)` claims a pending committed transition and derives its result without rerunning the original handler. It acknowledges the claim only after `deliver(result)` emits `undefined` to confirm durable handoff. It emits `false` when the store offers no work.
 
-Each broker factory accepts `consume`, an async function that processes a decoded event. Pass `raw => processWorkflowMessage(orchestrator, raw)` when the entity store commits pending work in the transition transaction. A separate dispatcher publishes automatic continuations. The factory does not open connections or start a polling process.
+Each broker factory accepts an async `consume` callback. Pass `raw => firstValueFrom(processWorkflowMessage(orchestrator, raw))` when the entity store commits pending work in the transition transaction. A separate dispatcher publishes automatic continuations. The factory does not open connections or start a polling process.
 
 | Factory and options | Inbound delivery | Outbound delivery |
 | --- | --- | --- |
@@ -63,7 +63,7 @@ The [deployment guide](/docs/deployment-architecture) covers message settlement,
 
 ## Retries and delivery errors
 
-An adapter can call [`transitAttempt(event, canRetry)`](/docs/api-reference/services#transitattempt) to support `@WithRetry`. Pass `true` only when another attempt remains. Retry only on `{ status: 'retry' }`. Keep the same `eventId` and increment `attempt`. Validation, guard, storage, and post-commit errors propagate instead of requesting a retry.
+An adapter can await `firstValueFrom(transitAttempt(event, canRetry))` to support `@WithRetry`. Pass `true` only when another attempt remains. Retry only on `{ status: 'retry' }`. Keep the same `eventId` and increment `attempt`. Validation, guard, storage, and post-commit errors propagate instead of requesting a retry.
 
 The orchestrator raises `ConflictException` (HTTP 409) when the entity has a live claim and the event has no receipt. A delivery system can requeue the original event with backoff. A custom HTTP adapter must validate its input before passing it to the orchestrator. A queue adapter must preserve the producer's logical event ID across redeliveries.
 
@@ -80,7 +80,7 @@ interface DurableWorkflowEvent {
 
 The producer supplies a non-blank `eventId` for the initial event and reuses it on redelivery. Callback bodies still contain `event` and an optional `payload`. The adapter derives stable IDs for callbacks. The orchestrator derives stable IDs for automatic continuations.
 
-The adapter does not use SDK automatic retries for transit steps. It schedules the next attempt only when `transitAttempt()` returns `{ status: 'retry' }`.
+The adapter does not use SDK automatic retries for transit steps. It schedules the next attempt only when `transitAttempt()` emits `{ status: 'retry' }`.
 
 Drain in-flight executions before you change their replay behavior. If you deploy a new version while executions are still running, keep those executions on the old version until they finish.
 

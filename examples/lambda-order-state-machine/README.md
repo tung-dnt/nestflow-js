@@ -173,18 +173,19 @@ Receipt keys use `transition#` and a hash of the order ID and event ID. They do 
 
 ### History and recovery outside Durable Lambda
 
-Set `WORKFLOW_HISTORY=true` to register the history reader. The `WorkflowRecords` index then lists committed history by order. `OrderEntityService.listTransitions()` returns metadata, not request payloads. Authorize the order before calling it. Index reads are eventually consistent, and older receipts are not backfilled. Recovery does not require history or telemetry.
+Set `WORKFLOW_HISTORY=true` to register the history reader. The `WorkflowRecords` index lists committed history by order. Subscribe to `OrderEntityService.listTransitions()` for metadata, not request payloads. Authorize access to the order first. Index reads are eventually consistent, and older receipts are not backfilled. Recovery does not require history or telemetry.
 
 For a broker or server using this store, set `WORKFLOW_RECOVERY=true` for dispatchers. Do not enable it for the Durable Lambda example, which already owns continuation. Run the exported `recoverNextTransition()` in a host worker:
 
 ```ts
 import { recoverNextTransition } from 'nestflow-js/adapter';
+import { defer, firstValueFrom, of } from 'rxjs';
 
-await recoverNextTransition(orchestrator, orderEntityService, async (result) => {
-  if (result.status === 'continued') {
-    await broker.publish(result.nextEvent);
-  }
-});
+await firstValueFrom(
+  recoverNextTransition(orchestrator, orderEntityService, (result) =>
+    result.status === 'continued' ? defer(() => broker.publish(result.nextEvent)) : of(undefined),
+  ),
+);
 ```
 
 The publisher must resolve only after the broker durably accepts the event. Preserve the event ID on delivery. If the worker dies before acknowledgement, another worker can take over after the lease expires; duplicate delivery is possible. Run the worker periodically, back off on failures, and alert on repeated errors. Use the outbox as the only continuation publisher when enabled. Idle and ambiguous transitions still need an external event; this worker does not create timers or callback registrations.
@@ -193,7 +194,7 @@ Recovery evaluates continuation guards against the saved receipt with the curren
 
 ### Cancel at a transition boundary
 
-Call `await orchestrator.requestCancellation(OrderEvent.CREATED, orderId)` from an authorized host. The event selects the workflow's entity provider; it is not dispatched. A repeated request returns `true` for an existing order. `false` means no order exists.
+Call `await firstValueFrom(orchestrator.requestCancellation(OrderEvent.CREATED, orderId))` from an authorized host. The event selects the workflow's entity provider; it is not dispatched. A repeated request emits `true` for an existing order. `false` means no order exists.
 
 Cancellation leaves the business state unchanged. A handler with an existing claim can finish and commit. New claims fail with `WorkflowCancelledException`. An outbox worker drops cancelled work when it claims it. A message published before the worker sees cancellation may still be delivered, but it cannot acquire a new transition claim. For broker consumers, treat `WorkflowCancelledException` as terminal, not as a retryable conflict.
 

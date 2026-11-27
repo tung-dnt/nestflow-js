@@ -5,7 +5,7 @@ description: Configure adapter retries and distinguish handler failures from err
 
 ## Configure handler retries
 
-Use `@WithRetry` to set the attempt budget and backoff for a handler. The [Durable Lambda adapter](/docs/plugins/durable-lambda#retry-integration) and [retry-aware custom adapters](/docs/recipes/custom-adapter#retry-only-classified-handler-failures) use that configuration. `orchestrator.transit()` always runs one attempt, even with `@WithRetry`.
+Use `@WithRetry` to set the attempt budget and backoff for a handler. The [Durable Lambda adapter](/docs/plugins/durable-lambda#retry-integration) and [retry-aware custom adapters](/docs/recipes/custom-adapter#retry-only-classified-handler-failures) use that configuration. `orchestrator.transit()` runs one attempt per subscription, even with `@WithRetry`.
 
 See [payment processing with retry](/docs/examples/payment-with-retry) for handler examples.
 
@@ -42,7 +42,7 @@ The adapter varies the exponential delay to spread out retries.
 
 ## Classify failures
 
-An adapter starts another attempt only when `transitAttempt()` returns `{ status: 'retry' }`. It keeps the same `eventId` and increments `attempt`.
+An adapter starts another attempt only when `transitAttempt()` emits `{ status: 'retry' }`. It keeps the same `eventId` and increments `attempt`.
 
 | Outcome | What happens |
 |---------|--------------|

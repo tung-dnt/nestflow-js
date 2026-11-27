@@ -26,6 +26,7 @@ import {
 } from '@nestjs/common';
 import { DiscoveryService, ModuleRef } from '@nestjs/core';
 import { createHash } from 'node:crypto';
+import { defer, firstValueFrom, share, tap, type Observable } from 'rxjs';
 import type { IWorkflowEvent } from '../types/workflow-event.interface';
 import {
   WORKFLOW_TELEMETRY,
@@ -138,43 +139,53 @@ export class OrchestratorService implements OnModuleInit {
     return this.routes.get(event)?.retryConfig;
   }
 
-  /** Request cancellation of the entity handled by the specified workflow event route. */
-  requestCancellation(event: string, urn: string | number): Promise<boolean> {
-    const route = this.routes.get(event);
-    if (!route) throw new BadRequestException(`No workflow found for event: ${event}`);
-    const cancellation = route.entityService.cancellation;
-    if (!cancellation) throw new BadRequestException('Workflow cancellation is not configured');
-    return cancellation.request(urn);
+  /** Request persisted cancellation on subscription. */
+  requestCancellation(event: string, urn: string | number): Observable<boolean> {
+    return defer(() => {
+      const route = this.routes.get(event);
+      if (!route) throw new BadRequestException(`No workflow found for event: ${event}`);
+      const cancellation = route.entityService.cancellation;
+      if (!cancellation) throw new BadRequestException('Workflow cancellation is not configured');
+      return cancellation.request(urn);
+    });
   }
 
-  /** Execute one attempt. Direct callers do not schedule handler retries. */
-  transit(params: IWorkflowEvent): Promise<TransitResult> {
+  /** Execute one attempt per subscription. Direct callers do not schedule handler retries. */
+  transit(params: IWorkflowEvent): Observable<TransitResult> {
     return this.transitAttempt(params, false);
   }
 
-  /** Execute an attempt for an adapter. Only handler errors can request a retry. */
-  transitAttempt(params: IWorkflowEvent, canRetry: false): Promise<TransitResult>;
-  transitAttempt(params: IWorkflowEvent, canRetry: boolean): Promise<TransitResult | { status: 'retry' }>;
-  async transitAttempt(params: IWorkflowEvent, canRetry: boolean): Promise<TransitResult | { status: 'retry' }> {
+  /** Execute one attempt per subscription. Only handler errors can request a retry. */
+  transitAttempt(params: IWorkflowEvent, canRetry: false): Observable<TransitResult>;
+  transitAttempt(params: IWorkflowEvent, canRetry: boolean): Observable<TransitResult | { status: 'retry' }>;
+  transitAttempt(params: IWorkflowEvent, canRetry: boolean): Observable<TransitResult | { status: 'retry' }> {
+    // Keep the claim lifecycle running even if the only observer unsubscribes.
+    return defer(() => this.traceAttempt(params, canRetry).pipe(share({ resetOnRefCountZero: false })));
+  }
+
+  private traceAttempt(params: IWorkflowEvent, canRetry: boolean): Observable<TransitResult | { status: 'retry' }> {
     const route = this.routes.get(params.event);
     const telemetry = this.telemetry;
-    if (!telemetry) return this.executeAttempt(params, canRetry, route);
+    if (!telemetry) return defer(() => this.executeAttempt(params, canRetry, route));
 
     const context = route && { workflow: route.definition.name, event: params.event, attempt: params.attempt };
     const startedAtMs = Date.now();
     const start = performance.now();
-    let outcome: TransitionTrace['outcome'] = 'error';
-    try {
-      const result = await this.executeAttempt(params, canRetry, route, context);
-      outcome = result.status;
-      if (context && outcome === 'retry') {
-        this.sendTelemetry(() => telemetry.log({ ...context, kind: 'retry_requested' }));
-      }
-      return result;
-    } finally {
+    const trace = (outcome: TransitionTrace['outcome']) => {
       const durationMs = performance.now() - start;
       this.sendTelemetry(() => telemetry.trace({ ...context, startedAtMs, durationMs, outcome }));
-    }
+    };
+    return defer(() => this.executeAttempt(params, canRetry, route, context)).pipe(
+      tap({
+        next: ({ status }) => {
+          if (context && status === 'retry') {
+            this.sendTelemetry(() => telemetry.log({ ...context, kind: 'retry_requested' }));
+          }
+          trace(status);
+        },
+        error: () => trace('error'),
+      }),
+    );
   }
 
   private sendTelemetry(send: () => void | Promise<void>): void {
@@ -203,7 +214,7 @@ export class OrchestratorService implements OnModuleInit {
     const router = this.routerHelperFactory.create(event, entityService, definition);
     logger.log(`Handling workflow event ${event}`, { urn, eventId, handler: handlerName });
 
-    const claim = await entityService.claimTransition(urn, eventId);
+    const claim = await firstValueFrom(entityService.claimTransition(urn, eventId));
     if (claim.kind === 'missing') throw new BadRequestException('Entity not found', String(urn));
     if (claim.kind === 'cancelled') throw new WorkflowCancelledException();
     if (claim.kind === 'busy') {
@@ -258,11 +269,13 @@ export class OrchestratorService implements OnModuleInit {
 
         const targetState = completion.kind === 'applied' ? transition.to : definition.states.failed;
         try {
-          receipt = await claim.commit(
-            targetState,
-            completion,
-            { workflow: definition.name, event, eventId, urn, from: state },
-            this.history && true,
+          receipt = await firstValueFrom(
+            claim.commit(
+              targetState,
+              completion,
+              { workflow: definition.name, event, eventId, urn, from: state },
+              this.history && true,
+            ),
           );
           committed = true;
         } catch (error) {
@@ -289,7 +302,7 @@ export class OrchestratorService implements OnModuleInit {
       } finally {
         if (!committed) {
           try {
-            await claim.release();
+            await firstValueFrom(claim.release());
           } catch (error) {
             if (!failure) throw error;
             throw transitionFailure('Could not release workflow transition claim', failure.cause, error);
@@ -301,16 +314,18 @@ export class OrchestratorService implements OnModuleInit {
     return this.resolveReceipt({ event, eventId, urn }, route, receipt);
   }
 
-  /** Resolve committed work from a trusted storage provider without running the original handler. */
-  async resumeCommitted(
+  /** Resolve committed work from trusted storage on subscription, without running the original handler. */
+  resumeCommitted(
     transition: TransitionCommitMetadata,
     receipt: TransitionReceipt<unknown>,
-  ): Promise<TransitResult> {
-    const route = this.routes.get(transition.event);
-    if (!route || route.definition.name !== transition.workflow) {
-      throw new Error(`Cannot resume committed event ${transition.event} in workflow ${transition.workflow}`);
-    }
-    return this.resolveReceipt(transition, route, receipt);
+  ): Observable<TransitResult> {
+    return defer(() => {
+      const route = this.routes.get(transition.event);
+      if (!route || route.definition.name !== transition.workflow) {
+        throw new Error(`Cannot resume committed event ${transition.event} in workflow ${transition.workflow}`);
+      }
+      return this.resolveReceipt(transition, route, receipt);
+    });
   }
 
   private async resolveReceipt(
@@ -318,7 +333,7 @@ export class OrchestratorService implements OnModuleInit {
     { definition, entityService }: IWorkflowDefaultRoute,
     receipt: TransitionReceipt<unknown>,
   ): Promise<TransitResult> {
-    if (entityService.cancellation && (await entityService.cancellation.isRequested(urn))) {
+    if (entityService.cancellation && (await firstValueFrom(entityService.cancellation.isRequested(urn)))) {
       throw new WorkflowCancelledException();
     }
     const router = this.routerHelperFactory.create(event, entityService, definition);

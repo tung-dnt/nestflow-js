@@ -1,3 +1,4 @@
+import { type Observable, defer, of } from 'rxjs';
 import { Injectable } from '@nestjs/common';
 import { InMemoryWorkflowEntity } from '../../fixtures/in-memory-workflow-entity';
 
@@ -29,14 +30,16 @@ export class OrderEntityService extends InMemoryWorkflowEntity<Order, 'status'> 
     super('status');
   }
 
-  async create(): Promise<Order> {
-    const order: Order = {
-      id: `order-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      status: OrderState.PENDING,
-      items: [],
-      totalAmount: 0,
-      customerId: `customer-${Math.random().toString(36).substr(2, 9)}`,
-    };
-    return this.save(order);
+  create(): Observable<Order> {
+    return defer(() => {
+      const order: Order = {
+        id: `order-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        status: OrderState.PENDING,
+        items: [],
+        totalAmount: 0,
+        customerId: `customer-${Math.random().toString(36).substr(2, 9)}`,
+      };
+      return of(this.save(order));
+    });
   }
 }

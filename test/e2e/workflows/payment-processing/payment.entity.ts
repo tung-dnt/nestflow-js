@@ -1,3 +1,4 @@
+import { type Observable, defer, of } from 'rxjs';
 import { Injectable } from '@nestjs/common';
 import { InMemoryWorkflowEntity } from '../../fixtures/in-memory-workflow-entity';
 
@@ -35,15 +36,17 @@ export class PaymentEntityService extends InMemoryWorkflowEntity<Payment, 'statu
     super('status');
   }
 
-  async create(): Promise<Payment> {
-    const payment: Payment = {
-      id: `payment-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      status: PaymentState.INITIATED,
-      amount: 0,
-      currency: 'USD',
-      retryCount: 0,
-      createdAt: new Date().toISOString(),
-    };
-    return this.save(payment);
+  create(): Observable<Payment> {
+    return defer(() => {
+      const payment: Payment = {
+        id: `payment-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        status: PaymentState.INITIATED,
+        amount: 0,
+        currency: 'USD',
+        retryCount: 0,
+        createdAt: new Date().toISOString(),
+      };
+      return of(this.save(payment));
+    });
   }
 }

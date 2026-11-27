@@ -1,3 +1,4 @@
+import { firstValueFrom } from 'rxjs';
 import { Test, TestingModule } from '@nestjs/testing';
 import { afterEach, beforeEach, describe, expect, test } from 'vite-plus/test';
 import { WorkflowModule } from '@/core/workflow.module';
@@ -43,43 +44,49 @@ describe('Payment Processing Workflow E2E', () => {
 
   describe('Happy Path - Successful Payment', () => {
     test('should complete payment flow: INITIATED → AUTHORIZING → CAPTURING → COMPLETED', async () => {
-      const payment = await entityService.create();
+      const payment = await firstValueFrom(entityService.create());
       payment.amount = 100;
       payment.currency = 'USD';
-      await entityService.update(payment, PaymentState.INITIATED);
+      await firstValueFrom(entityService.update(payment, PaymentState.INITIATED));
 
       // Step 1: Initiate
-      await orchestrator.transit(createWorkflowEvent(PaymentEvent.INITIATED, payment.id, { amount: 100 }));
-      let updatedPayment = await entityService.load(payment.id);
+      await firstValueFrom(
+        orchestrator.transit(createWorkflowEvent(PaymentEvent.INITIATED, payment.id, { amount: 100 })),
+      );
+      let updatedPayment = await firstValueFrom(entityService.load(payment.id));
       assertEntityState(updatedPayment!, entityService, PaymentState.AUTHORIZING);
 
       // Step 2: Authorize
-      await orchestrator.transit(
-        createWorkflowEvent(PaymentEvent.AUTHORIZED, payment.id, { cardNumber: '4111-1111-1111-1111' }),
+      await firstValueFrom(
+        orchestrator.transit(
+          createWorkflowEvent(PaymentEvent.AUTHORIZED, payment.id, { cardNumber: '4111-1111-1111-1111' }),
+        ),
       );
-      updatedPayment = await entityService.load(payment.id);
+      updatedPayment = await firstValueFrom(entityService.load(payment.id));
       assertEntityState(updatedPayment!, entityService, PaymentState.CAPTURING);
 
       // Step 3: Capture
-      await orchestrator.transit(createWorkflowEvent(PaymentEvent.CAPTURED, payment.id));
-      updatedPayment = await entityService.load(payment.id);
+      await firstValueFrom(orchestrator.transit(createWorkflowEvent(PaymentEvent.CAPTURED, payment.id)));
+      updatedPayment = await firstValueFrom(entityService.load(payment.id));
       assertEntityState(updatedPayment!, entityService, PaymentState.COMPLETED);
     });
   });
 
   describe.skip('Retry Mechanisms (retry not yet wired in orchestrator)', () => {
     test('should retry on transient network error during authorization', async () => {
-      const payment = await entityService.create();
+      const payment = await firstValueFrom(entityService.create());
       payment.amount = 100;
-      await entityService.update(payment, PaymentState.AUTHORIZING);
+      await firstValueFrom(entityService.update(payment, PaymentState.AUTHORIZING));
 
       // Simulate network error
       workflow.setSimulateNetworkError(true);
 
       // First attempt should fail and trigger retry
       try {
-        await orchestrator.transit(
-          createWorkflowEvent(PaymentEvent.AUTHORIZED, payment.id, { cardNumber: '4111-1111-1111-1111' }),
+        await firstValueFrom(
+          orchestrator.transit(
+            createWorkflowEvent(PaymentEvent.AUTHORIZED, payment.id, { cardNumber: '4111-1111-1111-1111' }),
+          ),
         );
       } catch (e) {
         // Expected to fail
@@ -90,17 +97,19 @@ describe('Payment Processing Workflow E2E', () => {
     });
 
     test('should not retry on unretriable error (invalid card)', async () => {
-      const payment = await entityService.create();
+      const payment = await firstValueFrom(entityService.create());
       payment.amount = 100;
-      await entityService.update(payment, PaymentState.AUTHORIZING);
+      await firstValueFrom(entityService.update(payment, PaymentState.AUTHORIZING));
 
       // Try with invalid card
-      await orchestrator.transit(
-        createWorkflowEvent(PaymentEvent.AUTHORIZED, payment.id, { cardNumber: '0000-0000-0000-0000' }),
+      await firstValueFrom(
+        orchestrator.transit(
+          createWorkflowEvent(PaymentEvent.AUTHORIZED, payment.id, { cardNumber: '0000-0000-0000-0000' }),
+        ),
       );
 
       // Should transition to failed state without retry
-      const updatedPayment = await entityService.load(payment.id);
+      const updatedPayment = await firstValueFrom(entityService.load(payment.id));
       assertEntityState(updatedPayment!, entityService, PaymentState.FAILED);
 
       // No retries should have been attempted
@@ -108,16 +117,16 @@ describe('Payment Processing Workflow E2E', () => {
     });
 
     test('should retry on transient network error during capture', async () => {
-      const payment = await entityService.create();
+      const payment = await firstValueFrom(entityService.create());
       payment.amount = 100;
-      await entityService.update(payment, PaymentState.CAPTURING);
+      await firstValueFrom(entityService.update(payment, PaymentState.CAPTURING));
 
       // Simulate network error
       workflow.setSimulateNetworkError(true);
 
       // First attempt should fail and trigger retry
       try {
-        await orchestrator.transit(createWorkflowEvent(PaymentEvent.CAPTURED, payment.id));
+        await firstValueFrom(orchestrator.transit(createWorkflowEvent(PaymentEvent.CAPTURED, payment.id)));
       } catch (e) {
         // Expected to fail
       }
@@ -129,63 +138,73 @@ describe('Payment Processing Workflow E2E', () => {
 
   describe('Refund Processing', () => {
     test('should refund completed payment', async () => {
-      const payment = await entityService.create();
+      const payment = await firstValueFrom(entityService.create());
       payment.amount = 100;
-      await entityService.update(payment, PaymentState.COMPLETED);
+      await firstValueFrom(entityService.update(payment, PaymentState.COMPLETED));
 
-      await orchestrator.transit(createWorkflowEvent(PaymentEvent.REFUNDED, payment.id, { refundId: 'REF-123' }));
+      await firstValueFrom(
+        orchestrator.transit(createWorkflowEvent(PaymentEvent.REFUNDED, payment.id, { refundId: 'REF-123' })),
+      );
 
-      const updatedPayment = await entityService.load(payment.id);
+      const updatedPayment = await firstValueFrom(entityService.load(payment.id));
       assertEntityState(updatedPayment!, entityService, PaymentState.REFUNDED);
     });
 
     test('should not allow refund from non-completed state', async () => {
-      const payment = await entityService.create();
+      const payment = await firstValueFrom(entityService.create());
       payment.amount = 100;
-      await entityService.update(payment, PaymentState.AUTHORIZING);
+      await firstValueFrom(entityService.update(payment, PaymentState.AUTHORIZING));
 
       // Try to refund from non-completed state
-      await expect(orchestrator.transit(createWorkflowEvent(PaymentEvent.REFUNDED, payment.id))).rejects.toThrow();
+      await expect(
+        firstValueFrom(orchestrator.transit(createWorkflowEvent(PaymentEvent.REFUNDED, payment.id))),
+      ).rejects.toThrow();
     });
   });
 
   describe('Error Handling', () => {
     test('should transition to FAILED on authorization failure', async () => {
-      const payment = await entityService.create();
+      const payment = await firstValueFrom(entityService.create());
       payment.amount = 100;
-      await entityService.update(payment, PaymentState.AUTHORIZING);
+      await firstValueFrom(entityService.update(payment, PaymentState.AUTHORIZING));
 
       // Invalid card should cause failure
-      await orchestrator.transit(
-        createWorkflowEvent(PaymentEvent.AUTHORIZED, payment.id, { cardNumber: '0000-0000-0000-0000' }),
+      await firstValueFrom(
+        orchestrator.transit(
+          createWorkflowEvent(PaymentEvent.AUTHORIZED, payment.id, { cardNumber: '0000-0000-0000-0000' }),
+        ),
       );
 
-      const updatedPayment = await entityService.load(payment.id);
+      const updatedPayment = await firstValueFrom(entityService.load(payment.id));
       assertEntityState(updatedPayment!, entityService, PaymentState.FAILED);
     });
 
     test('should handle payment failure event', async () => {
-      const payment = await entityService.create();
+      const payment = await firstValueFrom(entityService.create());
       payment.amount = 100;
-      await entityService.update(payment, PaymentState.AUTHORIZING);
+      await firstValueFrom(entityService.update(payment, PaymentState.AUTHORIZING));
 
-      await orchestrator.transit(
-        createWorkflowEvent(PaymentEvent.FAILED, payment.id, { errorMessage: 'Authorization declined' }),
+      await firstValueFrom(
+        orchestrator.transit(
+          createWorkflowEvent(PaymentEvent.FAILED, payment.id, { errorMessage: 'Authorization declined' }),
+        ),
       );
 
-      const updatedPayment = await entityService.load(payment.id);
+      const updatedPayment = await firstValueFrom(entityService.load(payment.id));
       assertEntityState(updatedPayment!, entityService, PaymentState.FAILED);
     });
   });
 
   describe('Idempotency', () => {
     test('should handle duplicate payment requests gracefully', async () => {
-      const payment = await entityService.create();
+      const payment = await firstValueFrom(entityService.create());
       payment.amount = 100;
-      await entityService.update(payment, PaymentState.COMPLETED);
+      await firstValueFrom(entityService.update(payment, PaymentState.COMPLETED));
 
       // Try to process already completed payment
-      await expect(orchestrator.transit(createWorkflowEvent(PaymentEvent.INITIATED, payment.id))).rejects.toThrow();
+      await expect(
+        firstValueFrom(orchestrator.transit(createWorkflowEvent(PaymentEvent.INITIATED, payment.id))),
+      ).rejects.toThrow();
     });
   });
 });

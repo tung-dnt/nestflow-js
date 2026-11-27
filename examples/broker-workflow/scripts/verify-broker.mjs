@@ -21,6 +21,7 @@ function worker(script, expectedSignal = null) {
     import { readFileSync, writeFileSync } from 'node:fs';
     import { join } from 'node:path';
     import { setTimeout } from 'node:timers/promises';
+    import { firstValueFrom } from 'rxjs';
     import { closeApp, consume, createOrder, dispatchOne } from './dist/app.js';
     import { PostgresOrderStore } from './dist/store.js';
 
@@ -74,15 +75,15 @@ async function verify() {
     const input = read('input.json');
     const store = new PostgresOrderStore();
     try {
-      const holder = await store.claimTransition(input.urn, 'smoke-lock-holder');
+      const holder = await firstValueFrom(store.claimTransition(input.urn, 'smoke-lock-holder'));
       assert.equal(holder.kind, 'acquired');
       try {
-        const contender = await store.claimTransition(input.urn, 'smoke-lock-contender');
+        const contender = await firstValueFrom(store.claimTransition(input.urn, 'smoke-lock-contender'));
         assert.deepEqual(contender, { kind: 'busy' });
-        const replay = await store.claimTransition(input.urn, input.eventId);
+        const replay = await firstValueFrom(store.claimTransition(input.urn, input.eventId));
         assert.equal(replay.kind, 'completed');
       } finally {
-        await holder.release();
+        await firstValueFrom(holder.release());
       }
     } finally {
       await store.onApplicationShutdown();

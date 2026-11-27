@@ -30,6 +30,35 @@ export default defineConfig({
   lint: {
     plugins: ['typescript'],
     rules: { 'typescript/no-floating-promises': 'error' },
+    overrides: [
+      {
+        files: [
+          'packages/core/types/{entity,workflow-recovery}.interface.ts',
+          'packages/adapter/{in-memory-workflow-entity,message-workflow.adapter,workflow-recovery}.ts',
+        ],
+        plugins: ['oxc', 'typescript'],
+        rules: {
+          'oxc/no-async-await': 'error',
+          'no-restricted-globals': ['error', 'Promise'],
+          'typescript/no-restricted-types': [
+            'error',
+            { types: { Promise: 'Return an Observable here.', PromiseLike: 'Return an Observable here.' } },
+          ],
+          'no-restricted-imports': [
+            'error',
+            {
+              paths: [
+                {
+                  name: 'rxjs',
+                  importNames: ['firstValueFrom', 'lastValueFrom'],
+                  message: 'Convert Observables to Promises only at host or SDK boundaries.',
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
     options: { typeAware: true, typeCheck: true },
   },
   test: {

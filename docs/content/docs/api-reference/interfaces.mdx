@@ -6,16 +6,16 @@ description: Core interfaces and types used throughout the NestflowJS workflow l
 
 ## IWorkflowEntity
 
-Interface for entity services that manage workflow entities.
+Entity persistence methods return cold Observables that emit exactly once and complete on success. Errors are reported through the Observable. `status()` and `urn()` are synchronous accessors.
 
 ### Signature
 
 ```typescript
 interface IWorkflowEntity<T = any, State = string | number> {
-	create(): Promise<T>;
-	load(urn: string | number): Promise<T | null>;
-	update(entity: T, status: State): Promise<T>;
-	claimTransition(urn: string | number, eventId: string): Promise<TransitionClaim<T, State>>;
+	create(): Observable<T>;
+	load(urn: string | number): Observable<T | null>;
+	update(entity: T, status: State): Observable<T>;
+	claimTransition(urn: string | number, eventId: string): Observable<TransitionClaim<T, State>>;
 	status(entity: T): State;
 	urn(entity: T): string | number;
 }
@@ -36,12 +36,18 @@ interface IWorkflowEntity<T = any, State = string | number> {
 type TransitionClaim<T, State> =
 	| { kind: 'missing' }
 	| { kind: 'busy' }
+	| { kind: 'cancelled' }
 	| { kind: 'completed'; receipt: TransitionReceipt<T> }
 	| {
 			kind: 'acquired';
 			entity: T;
-			commit(state: State, completion: TransitionCompletion): Promise<TransitionReceipt<T>>;
-			release(): Promise<void>;
+			commit(
+				state: State,
+				completion: TransitionCompletion,
+				metadata: TransitionCommitMetadata,
+				recordHistory?: true,
+			): Observable<TransitionReceipt<T>>;
+			release(): Observable<void>;
 		};
 ```
 
@@ -49,6 +55,7 @@ type TransitionClaim<T, State> =
 |------|---------|
 | `missing` | The entity does not exist. |
 | `busy` | The entity has a live claim and this event has no receipt. |
+| `cancelled` | A persisted cancellation request prevents new claims. |
 | `completed` | This event already committed for this entity. |
 | `acquired` | The caller owns the entity's transition lease. |
 

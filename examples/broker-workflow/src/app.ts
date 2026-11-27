@@ -3,6 +3,7 @@ import { Module, type INestApplicationContext } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { processWorkflowMessage, recoverNextTransition } from 'nestflow-js/adapter';
 import { OrchestratorService, WorkflowModule, type IWorkflowEvent } from 'nestflow-js/core';
+import { defer, firstValueFrom, of } from 'rxjs';
 
 import { ORDER_ENTITY, OrderWorkflow } from './order.workflow.js';
 import { PostgresOrderStore } from './store.js';
@@ -42,19 +43,21 @@ function getApp() {
 
 export async function consume(raw: unknown): Promise<void> {
   const { orchestrator } = await getApp();
-  await processWorkflowMessage(orchestrator, raw);
+  await firstValueFrom(processWorkflowMessage(orchestrator, raw));
 }
 
 export async function dispatchOne(publish: (event: IWorkflowEvent) => Promise<void>): Promise<boolean> {
   const { orchestrator, store } = await getApp();
-  return recoverNextTransition(orchestrator, store, async (result) => {
-    if (result.status === 'continued') await publish(result.nextEvent);
-  });
+  return firstValueFrom(
+    recoverNextTransition(orchestrator, store, (result) =>
+      result.status === 'continued' ? defer(() => publish(result.nextEvent)) : of(undefined),
+    ),
+  );
 }
 
 export async function createOrder(): Promise<string> {
   const { store } = await getApp();
-  return (await store.create()).id;
+  return (await firstValueFrom(store.create())).id;
 }
 
 export async function closeApp(): Promise<void> {

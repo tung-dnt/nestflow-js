@@ -48,6 +48,8 @@ sequenceDiagram
     participant Entity as EntityService
 
     Client->>Orchestrator: transit({ event, urn, eventId, payload })
+    Orchestrator-->>Client: cold Observable
+    Client->>Orchestrator: subscribe
     Orchestrator->>Entity: claimTransition(urn, eventId)
     Orchestrator->>Router: findValidTransition(entity, payload)
     Router-->>Orchestrator: matched transition

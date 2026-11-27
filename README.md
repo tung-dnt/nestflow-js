@@ -122,7 +122,7 @@ This is a breaking change. Upgrade event producers and entity services together.
 2. Supply a non-empty `eventId` for every `IWorkflowEvent` and initial `DurableWorkflowEvent`. Keep it unchanged across retries and redeliveries. Never use the same ID for different events on the same entity. Durable callback bodies still contain `{ event, payload }`. The adapter derives their IDs.
 3. Requeue a busy event with the same ID after backoff. The orchestrator raises `ConflictException` (HTTP 409). The Durable Lambda adapter does not treat a conflict, validation error, guard error, storage error, or post-commit error as a handler retry.
 4. Keep guards pure. Persist only serializable entity snapshots and handler output that are safe to store. Use `@EventId()` with the entity ID to deduplicate downstream side effects. A crash before commit can rerun the handler after the lease expires. Receipts deduplicate committed transitions and do not guarantee exactly-once side effects.
-5. Use `transit()` for a single attempt. A custom adapter that retries handlers must call `transitAttempt(event, canRetry)` and schedule another attempt only if it returns `{ status: 'retry' }`.
+5. Await `firstValueFrom(orchestrator.transit(event))` for a single attempt. A retry-aware custom adapter subscribes to `transitAttempt(event, canRetry)` and schedules another attempt only if it emits `{ status: 'retry' }`.
 
 Before you deploy the Durable Lambda replay changes, drain executions started on the old adapter or use versioning to keep them on that adapter until they finish. Do not replay their checkpoints with the new adapter.
 
@@ -165,7 +165,7 @@ This ensures minimal bundle sizes and faster cold starts in serverless environme
 
 ## Transit Result
 
-On success, `transit()` returns one of these results:
+`transit()` returns a cold RxJS Observable. Each subscription starts an attempt and emits one of these results on success. Unsubscribing does not cancel a running attempt.
 
 ```typescript
 type TransitResult =

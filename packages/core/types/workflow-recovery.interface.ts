@@ -1,11 +1,13 @@
+import type { Observable } from 'rxjs';
 import type { TransitionCompletion, TransitionReceipt } from './entity.interface';
 
 export const WORKFLOW_HISTORY = Symbol('WORKFLOW_HISTORY');
 
+/** Persistence methods return cold Observables that emit exactly once and complete on success. */
 export interface WorkflowCancellationStore {
   /** Persist an idempotent stop request. Return false if the entity does not exist. */
-  request(urn: string | number): Promise<boolean>;
-  isRequested(urn: string | number): Promise<boolean>;
+  request(urn: string | number): Observable<boolean>;
+  isRequested(urn: string | number): Observable<boolean>;
 }
 
 export interface TransitionCommitMetadata {
@@ -27,7 +29,7 @@ export interface WorkflowHistoryReader {
     urn: string | number,
     limit: number,
     cursor?: string,
-  ): Promise<{
+  ): Observable<{
     entries: WorkflowHistoryEntry[];
     cursor?: string;
   }>;
@@ -36,10 +38,10 @@ export interface WorkflowHistoryReader {
 export interface RecoveryClaim {
   transition: TransitionCommitMetadata;
   receipt: TransitionReceipt<unknown>;
-  acknowledge(): Promise<void>;
+  acknowledge(): Observable<void>;
 }
 
 export interface WorkflowRecoveryStore {
   /** Claim pending work under a finite lease. Only the current owner can acknowledge it. */
-  claimPending(): Promise<RecoveryClaim | undefined>;
+  claimPending(): Observable<RecoveryClaim | undefined>;
 }

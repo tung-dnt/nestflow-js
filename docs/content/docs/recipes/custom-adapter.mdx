@@ -21,17 +21,17 @@ Require an `eventId` at your entry point. Use a producer's stable message ID or 
 
 ## Retry only classified handler failures
 
-Call `orchestrator.transit(event)` if you do not need retries. It runs one attempt, even for handlers decorated with `@WithRetry`.
+Await `firstValueFrom(orchestrator.transit(event))` if you do not need retries. The subscription runs one attempt, even for handlers decorated with `@WithRetry`.
 
-For a custom Node transport, call `processWorkflowMessage(orchestrator, decodedMessage)` from `nestflow-js/adapter`. It validates the envelope and honors `@WithRetry` for one logical transition. It does not acknowledge the delivery or publish the next event.
+For a custom Node transport, subscribe to `processWorkflowMessage(orchestrator, decodedMessage)` from `nestflow-js/adapter`. It validates the envelope and honors `@WithRetry` for one logical transition. It does not acknowledge the delivery or publish the next event.
 
-If the runtime owns checkpointing and backoff, implement `executeTransit` with `orchestrator.transitAttempt(event, canRetry)`. Schedule a new attempt only for a `retry` result. Keep `eventId` unchanged and increment `attempt`. See the [Durable Lambda adapter](/docs/plugins/durable-lambda) for checkpointed attempts.
+If the runtime owns checkpointing and backoff, implement `executeTransit` with `firstValueFrom(orchestrator.transitAttempt(event, canRetry))`. Schedule a new attempt only for a `retry` result. Keep `eventId` unchanged and increment `attempt`. See the [Durable Lambda adapter](/docs/plugins/durable-lambda) for checkpointed attempts.
 
 The last attempt passes `false` so a handler failure commits the configured failed state and its exhaustion receipt before the error propagates. Do not catch and retry thrown errors. Validation, guard, claim, storage, and post-commit errors are not handler retry signals. For HTTP, preserve the `409 Conflict` response when another transition holds the entity's claim.
 
 ## Run in the current process
 
-Use `runInProcess(orchestrator, initialEvent)` from `nestflow-js/adapter` when no host-specific hooks are needed. It follows automatic transitions and returns as soon as the workflow finishes or needs input. See the [Node quick start](/docs/quick-start) for a complete example.
+Subscribe to `runInProcess(orchestrator, initialEvent)` from `nestflow-js/adapter` when no host-specific hooks are needed. It follows automatic transitions and emits when the workflow finishes or needs input. Unsubscribing stops future retries and continuations, but an attempt that has already started can still commit. See the [Node quick start](/docs/quick-start) for a complete example.
 
 ## Related
 

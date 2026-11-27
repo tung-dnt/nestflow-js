@@ -1,12 +1,16 @@
+import { concatMap, defer, EMPTY, expand, filter, of, take, timer, type Observable } from 'rxjs';
 import { RetryBackoff, type IWorkflowEvent, type OrchestratorService, type TransitResult } from '@/core';
 import { BadRequestException } from '@nestjs/common';
-import { setTimeout } from 'node:timers/promises';
 
 /** The broker message is malformed, rather than rejected by the workflow engine. */
 export class InvalidWorkflowMessageError extends BadRequestException {}
 
 /** Process one logical transition from a decoded broker message. The producer must supply its stable eventId. */
-export async function processWorkflowMessage(orchestrator: OrchestratorService, raw: unknown): Promise<TransitResult> {
+export function processWorkflowMessage(orchestrator: OrchestratorService, raw: unknown): Observable<TransitResult> {
+  return defer(() => executeTransition(orchestrator, parseMessage(raw)));
+}
+
+function parseMessage(raw: unknown): IWorkflowEvent<unknown> {
   if (!isMessageObject(raw)) throw new InvalidWorkflowMessageError('Expected a workflow event object');
 
   const eventId = Object.hasOwn(raw, 'eventId') ? raw.eventId : undefined;
@@ -21,13 +25,13 @@ export async function processWorkflowMessage(orchestrator: OrchestratorService, 
   if ((typeof urn !== 'string' || !urn.trim()) && (typeof urn !== 'number' || !Number.isFinite(urn))) {
     throw new InvalidWorkflowMessageError('A workflow entity urn is required');
   }
-  return executeTransition(orchestrator, {
+  return {
     event,
     eventId,
     urn,
     payload: Object.hasOwn(raw, 'payload') ? raw.payload : undefined,
     attempt: 0,
-  });
+  };
 }
 
 function isMessageObject(value: unknown): value is Record<string, unknown> {
@@ -35,32 +39,34 @@ function isMessageObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** Follow automatic continuations and return at the first terminal state or external-input wait. */
-export async function runInProcess(
+export function runInProcess(
   orchestrator: OrchestratorService,
   event: IWorkflowEvent<unknown>,
-): Promise<Exclude<TransitResult, { status: 'continued' }>> {
-  let current = { ...event, attempt: 0 };
-  while (true) {
-    const result = await executeTransition(orchestrator, current);
-    if (result.status !== 'continued') return result;
-    current = result.nextEvent;
-  }
+): Observable<Exclude<TransitResult, { status: 'continued' }>> {
+  return defer(() => executeTransition(orchestrator, { ...event, attempt: 0 })).pipe(
+    expand((result) => (result.status === 'continued' ? executeTransition(orchestrator, result.nextEvent) : EMPTY)),
+    filter((result) => result.status !== 'continued'),
+    take(1),
+  );
 }
 
-async function executeTransition(
+function executeTransition(
   orchestrator: OrchestratorService,
   event: IWorkflowEvent<unknown>,
-): Promise<TransitResult> {
+): Observable<TransitResult> {
   const retry = orchestrator.getRetryConfig(event.event);
   if (!retry) return orchestrator.transitAttempt(event, false);
 
-  for (let attempt = 1; attempt < retry.maxAttempts; attempt++) {
-    const result = await orchestrator.transitAttempt(event, true);
-    if (result.status !== 'retry') return result;
-
-    const delay = RetryBackoff.calculateDelay(event.attempt, retry);
-    if (delay > 0) await setTimeout(delay);
-    event = { ...event, attempt };
-  }
-  return orchestrator.transitAttempt(event, false);
+  return orchestrator.transitAttempt(event, event.attempt + 1 < retry.maxAttempts).pipe(
+    expand((result, index) => {
+      if (result.status !== 'retry') return EMPTY;
+      const attempt = event.attempt + index + 1;
+      const delay = RetryBackoff.calculateDelay(attempt - 1, retry);
+      return (delay > 0 ? timer(delay) : of(0)).pipe(
+        concatMap(() => orchestrator.transitAttempt({ ...event, attempt }, attempt + 1 < retry.maxAttempts)),
+      );
+    }),
+    filter((result) => result.status !== 'retry'),
+    take(1),
+  );
 }

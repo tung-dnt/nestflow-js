@@ -9,6 +9,8 @@
 - Add opt-in `@Payload(schema)` validation for Standard Schema v1, including Zod, Valibot, ArkType, and Joi 18. Handlers receive the parsed output of synchronous and asynchronous schemas.
 - Ship separate `@nestflow-js/validator-zod`, `@nestflow-js/validator-valibot`, `@nestflow-js/validator-arktype`, and `@nestflow-js/validator-joi` npm packages.
 - Add in-process and broker workflow adapters under `nestflow-js/adapter`, with RabbitMQ, Azure Service Bus, and Google Cloud Pub/Sub integrations. The deployment guide compares their recovery guarantees with Durable Lambda.
+- Breaking: `transit()`, `transitAttempt()`, and `resumeCommitted()` return cold RxJS Observables. Promise-based callers should use `firstValueFrom()`. Unsubscribing does not cancel persisted work.
+- Breaking: entity, claim, cancellation, history, and recovery ports now use cold, single-result Observables, as do Node workflow runners. Wrap Promise-based driver operations with `defer()`.
 
 ## v0.1.15
 

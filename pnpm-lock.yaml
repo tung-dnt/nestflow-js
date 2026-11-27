@@ -185,12 +185,6 @@ importers:
 
   .:
     dependencies:
-      class-transformer:
-        specifier: ^0.5.1
-        version: 0.5.1
-      class-validator:
-        specifier: ^0.14.2
-        version: 0.14.4
       rxjs:
         specifier: ^7.8.0
         version: 7.8.2
