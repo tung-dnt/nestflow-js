@@ -40,7 +40,7 @@ type TransitionClaim<T, State> =
 	| {
 			kind: 'acquired';
 			entity: T;
-			commit(state: State, completion: TransitionCompletion): Promise<TransitionReceipt<T>>;
+			commit(state: State, completion: TransitionCompletion, history?: WorkflowHistoryEntry): Promise<TransitionReceipt<T>>;
 			release(): Promise<void>;
 		};
 ```
@@ -52,7 +52,7 @@ type TransitionClaim<T, State> =
 | `completed` | This event already committed for this entity. |
 | `acquired` | The caller owns the entity's transition lease. |
 
-`commit()` must verify the owner's token, write the updated entity and receipt, and clear the claim atomically. A prior owner cannot commit after takeover. `release()` clears only the caller's own claim.
+`commit()` must verify the owner's token, write the updated entity and receipt, and clear the claim atomically. A prior owner cannot commit after takeover. `release()` clears only the caller's own claim. When `history` is passed, store it in the receipt and return it unchanged from later claims.
 
 ### TransitionReceipt
 
@@ -60,6 +60,7 @@ type TransitionClaim<T, State> =
 interface TransitionReceipt<T> {
 	entity: T;
 	completion: TransitionCompletion;
+	history?: WorkflowHistoryEntry;
 }
 
 type TransitionCompletion =

@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.958.0",
+    "@aws-sdk/client-lambda": "^3.1177.0",
     "@aws-sdk/lib-dynamodb": "^3.958.0",
     "@aws/durable-execution-sdk-js": "1.1.0",
     "@nestjs/common": "^12.6.2",

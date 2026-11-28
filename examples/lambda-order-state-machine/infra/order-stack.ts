@@ -22,12 +22,6 @@ class OrderStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
-    table.addGlobalSecondaryIndex({
-      indexName: 'WorkflowRecords',
-      partitionKey: { name: 'recordGroup', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'recordOrder', type: dynamodb.AttributeType.STRING },
-      projectionType: dynamodb.ProjectionType.KEYS_ONLY,
-    });
 
     // CloudWatch Log Group
     const logGroup = new logs.LogGroup(this, 'OrderWorkflowLogs', {
