@@ -6,4 +6,4 @@ export * from './transition-event.interface';
 export * from './workflow-definition.interface';
 export * from './workflow-event.interface';
 export * from './workflow-telemetry.interface';
-export * from './workflow-recovery.interface';
+export * from './workflow-history.interface';

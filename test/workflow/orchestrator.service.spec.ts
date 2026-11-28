@@ -1,4 +1,4 @@
-import { DurableLambdaEventHandler, recoverNextTransition, type DurableWorkflowEvent } from '@/adapter';
+import { DurableLambdaEventHandler, type DurableWorkflowEvent } from '@/adapter';
 import {
   EventId,
   OnEvent,
@@ -13,11 +13,10 @@ import {
   type IWorkflowDefinition,
   type IWorkflowEvent,
   type PayloadValidator,
-  type RecoveryClaim,
   type TransitionLog,
   type TransitionTrace,
   type WorkflowTelemetry,
-  type WorkflowHistoryReader,
+  type WorkflowHistory,
 } from '@/core';
 import { UnretriableException, WorkflowCancelledException } from '@/exception';
 import { BadRequestException, ConflictException, Logger } from '@nestjs/common';
@@ -58,6 +57,7 @@ describe('Workflow transition regressions', () => {
     beforeCommit,
     telemetry,
     history,
+    historyOptions,
   }: {
     transitions?: Definition['transitions'];
     idles?: Definition['states']['idles'];
@@ -66,7 +66,8 @@ describe('Workflow transition regressions', () => {
     handle?: (eventId: string) => Promise<unknown>;
     beforeCommit?: (state: State) => void;
     telemetry?: WorkflowTelemetry;
-    history?: WorkflowHistoryReader;
+    history?: WorkflowHistory;
+    historyOptions?: Definition['history'];
   } = {}) {
     const event = createWorkflowEvent(eventName, orderUrn);
     class OrderStore extends InMemoryWorkflowEntity<Entity, 'state'> {
@@ -83,6 +84,7 @@ describe('Workflow transition regressions', () => {
       states: { finals: ['done', 'failed'], idles, failed: 'failed' },
       transitions,
       conditions,
+      history: historyOptions,
     })
     class OrderWorkflow {
       @OnEvent(eventName)
@@ -148,56 +150,52 @@ describe('Workflow transition regressions', () => {
       expect((await store.load(event.urn))?.state).toBe('review');
     });
 
-    test.each([false, true])('recovers pending delivery with cancellation requested: %s', async (cancel) => {
+    test.each([false, true])('records each committed entry until the host accepts it, payload: %s', async (payload) => {
       let handlerCalls = 0;
-      const { app, event, orchestrator, store } = await createWorkflow({
-        transitions: [advance('pending', 'review'), advance('review', 'done')],
-        history: cancel ? { listTransitions: async () => ({ entries: [] }) } : undefined,
+      const record = vi
+        .fn<NonNullable<WorkflowHistory['record']>>()
+        .mockRejectedValueOnce(new Error('History store unavailable'))
+        .mockResolvedValue();
+      const { app, event, orchestrator } = await createWorkflow({
+        history: { record, list: async () => ({ entries: [] }) },
+        historyOptions: { payload },
         handle: async () => {
           handlerCalls++;
-          return { approved: true };
         },
       });
       await app.init();
-      let pending: RecoveryClaim | undefined;
-      const acquire = store.claimTransition.bind(store);
-      vi.spyOn(store, 'claimTransition').mockImplementation(async (urn, eventId) => {
-        const claim = await acquire(urn, eventId);
-        if (claim.kind !== 'acquired') return claim;
-        return {
-          ...claim,
-          commit: async (state, completion, transition, recordHistory) => {
-            expect(recordHistory).toBe(cancel ? true : undefined);
-            const receipt = await claim.commit(state, completion, transition, recordHistory);
-            pending = {
-              transition,
-              receipt,
-              acknowledge: async () => {
-                pending = undefined;
-              },
-            };
-            return receipt;
-          },
-        };
-      });
+      const input = { ...event, payload: { note: 'kept only on opt-in' } };
 
-      const original = await orchestrator.transit(event);
-      expect(original).toMatchObject({ status: 'continued', nextEvent: { urn: event.urn, event: eventName } });
-      const recovery = { claimPending: async () => pending };
-      const brokerError = new Error('Broker unavailable');
-      await expect(
-        recoverNextTransition(orchestrator, recovery, async () => {
-          throw brokerError;
-        }),
-      ).rejects.toBe(brokerError);
-      if (cancel) await orchestrator.requestCancellation(event.event, event.urn);
-      const deliver = vi.fn(async () => {});
-      expect(await recoverNextTransition(orchestrator, recovery, deliver)).toBe(true);
-      if (cancel) expect(deliver).not.toHaveBeenCalled();
-      else expect(deliver).toHaveBeenCalledExactlyOnceWith(original);
-      expect(await recoverNextTransition(orchestrator, recovery, deliver)).toBe(false);
+      await expect(orchestrator.transit(input)).rejects.toThrow('History store unavailable');
+      const redelivered = await orchestrator.transit(input);
+
+      const entry = record.mock.calls[0]?.[0];
+      expect(entry).toMatchObject({ event: eventName, eventId: event.eventId, from: 'pending', to: 'done' });
+      expect(entry?.outcome).toBe('applied');
+      expect(entry?.payload).toEqual(payload ? input.payload : undefined);
+      expect(record).toHaveBeenLastCalledWith(entry);
+      expect(redelivered).toEqual({ status: 'final', state: 'done', history: entry });
       expect(handlerCalls).toBe(1);
-      expect((await store.load(event.urn))?.state).toBe('review');
+    });
+
+    test('records the handler failure that moved the entity to the failed state', async () => {
+      const record = vi.fn<NonNullable<WorkflowHistory['record']>>().mockResolvedValue();
+      const { app, event, orchestrator } = await createWorkflow({
+        history: { record, list: async () => ({ entries: [] }) },
+        handle: async () => {
+          throw new UnretriableException('Card declined');
+        },
+      });
+      await app.init();
+
+      expect(await orchestrator.transit(event)).toMatchObject({ status: 'final', state: 'failed' });
+      expect(record).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          to: 'failed',
+          outcome: 'unretriable',
+          error: expect.objectContaining({ message: 'Card declined' }),
+        }),
+      );
     });
 
     test('reports a commit and a receipt replay as distinct facts', async () => {
