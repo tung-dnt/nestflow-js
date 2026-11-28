@@ -2,7 +2,7 @@ import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { PutCommand, TransactGetCommand, TransactWriteCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { Injectable } from '@nestjs/common';
 import { EntityParser, GetItemCommand } from 'dynamodb-toolbox';
-import type { IWorkflowEntity, TransitionClaim, TransitionReceipt } from 'nestflow-js/core';
+import type { IWorkflowEntity, TransitionClaim, TransitionReceipt, WorkflowHistoryEntry } from 'nestflow-js/core';
 import { createHash, randomUUID } from 'node:crypto';
 import { uuidv7 } from 'uuidv7';
 
@@ -18,10 +18,10 @@ const orderAvailable =
   'attribute_exists(#status) AND (attribute_not_exists(leaseExpiresAt) OR leaseExpiresAt <= :now)';
 const statusAttribute = { '#status': 'status' };
 
-function decodeOutput(outputJson: unknown): unknown {
-  if (outputJson === undefined) return undefined;
-  if (typeof outputJson !== 'string') throw new Error('Invalid order transition output');
-  return JSON.parse(outputJson);
+function decodeJson(json: unknown): unknown {
+  if (json === undefined) return undefined;
+  if (typeof json !== 'string') throw new Error('Invalid order transition receipt');
+  return JSON.parse(json);
 }
 
 async function readTransition(
@@ -38,13 +38,15 @@ async function readTransition(
   if (!item) return { order };
 
   const entity: Order = orderParser.parse(item.entity, { fill: false }).item;
+  // Written only by commit() below from an orchestrator-built entry.
+  const history = decodeJson(item.historyJson) as WorkflowHistoryEntry | undefined;
   const kind: unknown = item.kind;
   switch (kind) {
     case 'applied':
-      return { order, receipt: { entity, completion: { kind, output: decodeOutput(item.outputJson) } } };
+      return { order, receipt: { entity, completion: { kind, output: decodeJson(item.outputJson) }, history } };
     case 'unretriable':
     case 'exhausted':
-      return { order, receipt: { entity, completion: { kind } } };
+      return { order, receipt: { entity, completion: { kind }, history } };
     default:
       throw new Error('Invalid order transition receipt');
   }
@@ -147,12 +149,13 @@ export class OrderEntityService implements IWorkflowEntity<Order, OrderState> {
         return {
           kind: 'acquired',
           entity,
-          async commit(status, completion) {
+          async commit(status, completion, history) {
             const updated: Order = orderParser.parse({ ...entity, id: key.id, status }).item;
             const output = completion.kind === 'applied' ? completion.output : undefined;
             const outputJson = output === undefined ? undefined : JSON.stringify(output);
-            if (output !== undefined && outputJson === undefined) {
-              throw new Error('Order transition output is not JSON-serializable');
+            const historyJson = history && JSON.stringify(history);
+            if ((output !== undefined && outputJson === undefined) || (history && historyJson === undefined)) {
+              throw new Error('Order transition output or history is not JSON-serializable');
             }
             const commitTime = Date.now();
             if (commitTime >= expiresAt) throw new Error('Order transition lease expired');
@@ -160,11 +163,21 @@ export class OrderEntityService implements IWorkflowEntity<Order, OrderState> {
               ClientRequestToken: owner,
               TransactItems: [
                 {
-                  Put: {
+                  Update: {
                     TableName: tableName,
-                    Item: updated,
+                    Key: key,
+                    UpdateExpression:
+                      'SET #status = :status, #item = :item, quantity = :quantity, price = :price REMOVE leaseOwner, leaseExpiresAt',
                     ConditionExpression: 'leaseOwner = :owner AND leaseExpiresAt > :now',
-                    ExpressionAttributeValues: { ':owner': owner, ':now': commitTime },
+                    ExpressionAttributeNames: { ...statusAttribute, '#item': 'item' },
+                    ExpressionAttributeValues: {
+                      ':owner': owner,
+                      ':now': commitTime,
+                      ':status': updated.status,
+                      ':item': updated.item,
+                      ':quantity': updated.quantity,
+                      ':price': updated.price,
+                    },
                   },
                 },
                 {
@@ -175,6 +188,7 @@ export class OrderEntityService implements IWorkflowEntity<Order, OrderState> {
                       entity: updated,
                       kind: completion.kind,
                       outputJson,
+                      historyJson,
                     },
                     ConditionExpression: 'attribute_not_exists(id)',
                   },
@@ -183,7 +197,8 @@ export class OrderEntityService implements IWorkflowEntity<Order, OrderState> {
             }));
             return {
               entity: updated,
-              completion: completion.kind === 'applied' ? { kind: 'applied', output: decodeOutput(outputJson) } : completion,
+              completion: completion.kind === 'applied' ? { kind: 'applied', output: decodeJson(outputJson) } : completion,
+              history: history && (decodeJson(historyJson) as WorkflowHistoryEntry),
             };
           },
           release,

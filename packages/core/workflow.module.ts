@@ -34,6 +34,8 @@ export class WorkflowModule {
    * @param options.entities  - Providers for {@link IWorkflowEntity} implementations (keyed by injection token)
    * @param options.workflows - Workflow classes decorated with {@link Workflow}
    * @param options.providers - Extra providers to include in the module
+   * Register a `WorkflowTelemetry` provider under `WORKFLOW_TELEMETRY` in `providers`,
+   * or import a module that exports the token.
    */
   static register(options: {
     imports?: any[];

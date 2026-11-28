@@ -65,6 +65,11 @@ export interface IWorkflowDefinition<T, Event, State> {
    * handles persistence for this workflow's entities.
    */
   entityService: string;
+  /** Transition history options, used when a `WORKFLOW_HISTORY` provider is registered. */
+  history?: {
+    /** Store each event payload in its history entry. Payloads can hold personal data and grow receipts. */
+    payload?: boolean;
+  };
 }
 
 /**

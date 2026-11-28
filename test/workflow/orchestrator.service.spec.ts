@@ -8,11 +8,17 @@ import {
   WithRetry,
   Workflow,
   WorkflowModule,
+  WORKFLOW_HISTORY,
+  WORKFLOW_TELEMETRY,
   type IWorkflowDefinition,
   type IWorkflowEvent,
   type PayloadValidator,
+  type TransitionLog,
+  type TransitionTrace,
+  type WorkflowTelemetry,
+  type WorkflowHistory,
 } from '@/core';
-import { UnretriableException } from '@/exception';
+import { UnretriableException, WorkflowCancelledException } from '@/exception';
 import { BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { afterEach, describe, expect, test, vi } from 'vite-plus/test';
@@ -49,6 +55,9 @@ describe('Workflow transition regressions', () => {
     payloadValidator,
     handle = async () => {},
     beforeCommit,
+    telemetry,
+    history,
+    historyOptions,
   }: {
     transitions?: Definition['transitions'];
     idles?: Definition['states']['idles'];
@@ -56,6 +65,9 @@ describe('Workflow transition regressions', () => {
     payloadValidator?: PayloadValidator;
     handle?: (eventId: string) => Promise<unknown>;
     beforeCommit?: (state: State) => void;
+    telemetry?: WorkflowTelemetry;
+    history?: WorkflowHistory;
+    historyOptions?: Definition['history'];
   } = {}) {
     const event = createWorkflowEvent(eventName, orderUrn);
     class OrderStore extends InMemoryWorkflowEntity<Entity, 'state'> {
@@ -72,6 +84,7 @@ describe('Workflow transition regressions', () => {
       states: { finals: ['done', 'failed'], idles, failed: 'failed' },
       transitions,
       conditions,
+      history: historyOptions,
     })
     class OrderWorkflow {
       @OnEvent(eventName)
@@ -88,6 +101,10 @@ describe('Workflow transition regressions', () => {
             entities: [{ provide: 'test.orders', useValue: store }],
             workflows: [OrderWorkflow],
             payloadValidator,
+            providers: [
+              ...(telemetry ? [{ provide: WORKFLOW_TELEMETRY, useValue: telemetry }] : []),
+              ...(history ? [{ provide: WORKFLOW_HISTORY, useValue: history }] : []),
+            ],
           }),
         ],
       }).compile();
@@ -105,6 +122,136 @@ describe('Workflow transition regressions', () => {
 
       expect(await orchestrator.transit(event)).toEqual({ status: 'final', state: 'done' });
       expect((await store.load(event.urn))?.state).toBe('done');
+    });
+
+    test('blocks new claims and continuation but lets an already claimed handler commit', async () => {
+      const started = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      const { app, orchestrator, event, store } = await createWorkflow({
+        transitions: [advance('pending', 'review'), advance('review', 'done')],
+        handle: async () => {
+          started.resolve();
+          await finish.promise;
+        },
+      });
+      await app.init();
+      const attempted = expect(orchestrator.transit(event)).rejects.toBeInstanceOf(WorkflowCancelledException);
+      await started.promise;
+      try {
+        expect(await orchestrator.requestCancellation(event.event, event.urn)).toBe(true);
+        expect(await orchestrator.requestCancellation(event.event, event.urn)).toBe(true);
+        await expect(orchestrator.transit(createWorkflowEvent(event.event, event.urn))).rejects.toBeInstanceOf(
+          WorkflowCancelledException,
+        );
+      } finally {
+        finish.resolve();
+      }
+      await attempted;
+      expect((await store.load(event.urn))?.state).toBe('review');
+    });
+
+    test.each([false, true])('records each committed entry until the host accepts it, payload: %s', async (payload) => {
+      let handlerCalls = 0;
+      const record = vi
+        .fn<NonNullable<WorkflowHistory['record']>>()
+        .mockRejectedValueOnce(new Error('History store unavailable'))
+        .mockResolvedValue();
+      const { app, event, orchestrator } = await createWorkflow({
+        history: { record, list: async () => ({ entries: [] }) },
+        historyOptions: { payload },
+        handle: async () => {
+          handlerCalls++;
+        },
+      });
+      await app.init();
+      const input = { ...event, payload: { note: 'kept only on opt-in' } };
+
+      await expect(orchestrator.transit(input)).rejects.toThrow('History store unavailable');
+      const redelivered = await orchestrator.transit(input);
+
+      const entry = record.mock.calls[0]?.[0];
+      expect(entry).toMatchObject({ event: eventName, eventId: event.eventId, from: 'pending', to: 'done' });
+      expect(entry?.outcome).toBe('applied');
+      expect(entry?.payload).toEqual(payload ? input.payload : undefined);
+      expect(record).toHaveBeenLastCalledWith(entry);
+      expect(redelivered).toEqual({ status: 'final', state: 'done', history: entry });
+      expect(handlerCalls).toBe(1);
+    });
+
+    test('records the handler failure that moved the entity to the failed state', async () => {
+      const record = vi.fn<NonNullable<WorkflowHistory['record']>>().mockResolvedValue();
+      const { app, event, orchestrator } = await createWorkflow({
+        history: { record, list: async () => ({ entries: [] }) },
+        handle: async () => {
+          throw new UnretriableException('Card declined');
+        },
+      });
+      await app.init();
+
+      expect(await orchestrator.transit(event)).toMatchObject({ status: 'final', state: 'failed' });
+      expect(record).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          to: 'failed',
+          outcome: 'unretriable',
+          error: expect.objectContaining({ message: 'Card declined' }),
+        }),
+      );
+    });
+
+    test('reports a commit and a receipt replay as distinct facts', async () => {
+      const logs: TransitionLog[] = [];
+      const traces: TransitionTrace[] = [];
+      const { app, event, orchestrator } = await createWorkflow({
+        telemetry: {
+          log: (entry) => {
+            logs.push(entry);
+          },
+          trace: (entry) => {
+            traces.push(entry);
+          },
+        },
+      });
+      await app.init();
+      const input = { ...event, payload: { note: 'private-telemetry-payload' } };
+
+      await orchestrator.transit(input);
+      await orchestrator.transit(input);
+
+      expect(logs).toEqual([
+        {
+          kind: 'transition_committed',
+          workflow: 'OrderWorkflow',
+          event: eventName,
+          attempt: 0,
+          from: 'pending',
+          to: 'done',
+          outcome: 'applied',
+        },
+        { kind: 'receipt_replayed', workflow: 'OrderWorkflow', event: eventName, attempt: 0, outcome: 'applied' },
+      ]);
+      expect(traces.map((trace) => trace.outcome)).toEqual(['final', 'final']);
+      expect(JSON.stringify(traces)).not.toContain('private-telemetry-payload');
+    });
+
+    test('preserves the handler error when telemetry throws or rejects', async () => {
+      const failure = new Error('Handler failed');
+      const { app, event, orchestrator, store } = await createWorkflow({
+        handle: async () => {
+          throw failure;
+        },
+        telemetry: {
+          log: () => {
+            throw new Error('Logger unavailable');
+          },
+          trace: async () => {
+            throw new Error('Tracer unavailable');
+          },
+        },
+      });
+      await app.init();
+
+      await expect(orchestrator.transit(event)).rejects.toBe(failure);
+      expect((await store.load(event.urn))?.state).toBe('failed');
     });
 
     test('rejects invalid payloads without running the handler or changing the state', async () => {

@@ -1,3 +1,11 @@
+import type { WorkflowHistoryEntry } from './workflow-history.interface';
+
+export interface WorkflowCancellationStore {
+  /** Persist an idempotent stop request. Return false if the entity does not exist. */
+  request(urn: string | number): Promise<boolean>;
+  isRequested(urn: string | number): Promise<boolean>;
+}
+
 export type TransitionCompletion =
   | { kind: 'applied'; output: unknown }
   | { kind: 'unretriable' }
@@ -6,21 +14,31 @@ export type TransitionCompletion =
 export interface TransitionReceipt<T> {
   entity: T;
   completion: TransitionCompletion;
+  /** Entry passed to `commit()`; later claims for the event return it unchanged. */
+  history?: WorkflowHistoryEntry;
 }
 
 export type TransitionClaim<T, State> =
   | { kind: 'missing' }
   | { kind: 'busy' }
+  | { kind: 'cancelled' }
   | { kind: 'completed'; receipt: TransitionReceipt<T> }
   | {
       kind: 'acquired';
       entity: T;
-      commit(state: State, completion: TransitionCompletion): Promise<TransitionReceipt<T>>;
+      commit(
+        state: State,
+        completion: TransitionCompletion,
+        history?: WorkflowHistoryEntry,
+      ): Promise<TransitionReceipt<T>>;
       release(): Promise<void>;
     };
 
 /** Persistence contract for entities and atomic workflow transition receipts. */
 export interface IWorkflowEntity<T = any, State = string | number> {
+  /** When configured, new claims must atomically reject cancelled entities. */
+  cancellation?: WorkflowCancellationStore;
+
   /**
    * Creates a new instance of the entity
    * @returns A new entity instance
