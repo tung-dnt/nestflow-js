@@ -2,6 +2,7 @@
   "compilerOptions": {
     // Enable latest features
     "lib": ["ESNext", "DOM"],
+    "types": ["node"],
     "target": "ESNext",
     "module": "ESNext",
     "moduleDetection": "force",
@@ -35,6 +36,6 @@
       "@/*": ["./src/*"],
     },
   },
-  "include": ["src/**/*.ts", "infra/**/*.ts"],
-  "exclude": ["node_modules", "dist", ".build"]
+  "include": ["src/**/*.ts", "infra/**/*.ts", "vite.config.ts"],
+  "exclude": ["node_modules", "dist"]
 }

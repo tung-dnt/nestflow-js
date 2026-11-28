@@ -1,6 +1,18 @@
 import { defineConfig } from 'vite-plus';
 
 export default defineConfig({
+  pack: [
+    {
+      entry: {
+        'core/index': 'packages/core/index.ts',
+        'exception/index': 'packages/exception/index.ts',
+        'adapter/index': 'packages/adapter/index.ts',
+      },
+      fixedExtension: false,
+      dts: true,
+      sourcemap: true,
+    },
+  ],
   resolve: { tsconfigPaths: true },
   oxc: {
     decorator: { legacy: true, emitDecoratorMetadata: true },
@@ -12,7 +24,7 @@ export default defineConfig({
   lint: {
     plugins: ['typescript'],
     rules: { 'typescript/no-floating-promises': 'error' },
-    options: { typeAware: true },
+    options: { typeAware: true, typeCheck: true },
   },
   test: {
     include: ['test/**/*.spec.ts'],

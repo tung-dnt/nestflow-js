@@ -5,7 +5,6 @@ src/
 
 # Build configuration
 tsconfig.json
-tsconfig.build.json
 bunfig.toml
 scripts/
 

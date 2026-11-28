@@ -73,10 +73,16 @@ To exercise order storage with DynamoDB Local, set `DYNAMODB_ENDPOINT` to the lo
 
 ### Build the Lambda bundle
 
-The build compiles TypeScript, then uses esbuild to bundle the handler as `dist/lambda.mjs`.
+`pnpm build` type-checks the example with Vite Plus, then bundles the handler and its runtime dependencies into `dist/lambda.mjs`. CDK deploys the contents of `dist`. The local server and the CDK app run directly from TypeScript.
 
 ```bash
 pnpm build
+```
+
+To check that the handler loads without the workspace's `node_modules`, run:
+
+```bash
+pnpm run verify:lambda
 ```
 
 ### Preview Changes
