@@ -332,33 +332,33 @@ type PayloadValidator = (schema: unknown, payload: unknown) => unknown;
 - `schema`: The validation schema (e.g., a Zod schema, Joi schema, or class-validator class)
 - `payload`: The payload to validate
 
-**Returns**: The validated (and potentially transformed) payload, or throws on validation failure.
+**Returns**: The validated payload or a promise for it. If validation throws or rejects, the handler does not run.
 
 Provided via the `payloadValidator` option in `WorkflowModule.register()`.
 
 ### Example
 
 ```typescript
-import { z } from 'zod';
+import { WorkflowModule } from 'nestflow-js/core';
+import { zodPayloadValidator } from '@nestflow-js/validator-zod';
 
-// Using Zod
-const zodValidator: PayloadValidator = (schema, payload) => {
-  return (schema as z.ZodSchema).parse(payload);
-};
-
-// Using Joi
-const joiValidator: PayloadValidator = (schema, payload) => {
-  const { value, error } = (schema as Joi.Schema).validate(payload);
-  if (error) throw error;
-  return value;
-};
-
-// Register with the workflow module
 WorkflowModule.register({
-  workflows: [orderWorkflow],
-  payloadValidator: zodValidator,
+  entities: [orderEntityProvider],
+  workflows: [OrderWorkflow],
+  payloadValidator: zodPayloadValidator,
 });
 ```
+
+Install the plugin and its schema library:
+
+| npm package | Peer library | Export |
+| --- | --- | --- |
+| `@nestflow-js/validator-zod` | `zod` 4 | `zodPayloadValidator` |
+| `@nestflow-js/validator-valibot` | `valibot` 1 | `valibotPayloadValidator` |
+| `@nestflow-js/validator-arktype` | `arktype` 2 | `arkTypePayloadValidator` |
+| `@nestflow-js/validator-joi` | `joi` 18 | `joiPayloadValidator` |
+
+If handlers in the same module mix schema libraries, use `standardSchemaPayloadValidator` from `nestflow-js/core` for Standard Schema v1 schemas. For other formats, supply a custom `payloadValidator`.
 
 ## TEither
 

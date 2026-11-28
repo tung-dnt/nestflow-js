@@ -83,6 +83,10 @@ WorkflowModule.register({
 
 Entries omit the event payload unless the workflow sets `history: { payload: true }`. Payloads can hold personal data and make every receipt larger.
 
+## Cancellation
+
+An entity provider that exposes `cancellation` can accept `orchestrator.requestCancellation(event, urn)`. The `event` selects the workflow's entity provider. Requests are idempotent and must be authorized by the host. A cancelled entity rejects new claims with `WorkflowCancelledException` from `nestflow-js/exception`. An already claimed transition can finish, but once cancellation is observed the orchestrator does not return a continuation.
+
 ## Architecture
 
 ```mermaid

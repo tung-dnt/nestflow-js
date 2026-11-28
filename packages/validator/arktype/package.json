@@ -1,0 +1,30 @@
+{
+  "name": "@nestflow-js/validator-arktype",
+  "version": "0.1.15",
+  "description": "ArkType payload validation for nestflow-js workflow handlers",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tung-dnt/nestflow-js.git",
+    "directory": "packages/validator/arktype"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "arktype": "^2.0.0"
+  }
+}

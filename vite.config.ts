@@ -12,6 +12,12 @@ export default defineConfig({
       dts: true,
       sourcemap: true,
     },
+    ...['arktype', 'joi', 'valibot', 'zod'].map((name) => ({
+      cwd: `packages/validator/${name}`,
+      entry: ['index.ts'],
+      fixedExtension: false,
+      dts: true,
+    })),
   ],
   resolve: { tsconfigPaths: true },
   oxc: {

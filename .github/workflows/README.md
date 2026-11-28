@@ -11,9 +11,9 @@ uploads `dist/` as `build-output` for seven days.
 
 [`release.yml`](release.yml) runs on pushes to `main`, except version bump commits,
 and on manual dispatch. It runs the same checks as CI before bumping the version,
-updating the changelog, committing, and tagging. It publishes with
-`npm publish --access public`, which rebuilds via `prepublishOnly`, and creates a
-GitHub release. Configure the `NPM_TOKEN` repository secret before publishing.
+updating the changelog, committing, and tagging. It publishes the core package
+and four scoped validator packages before creating the GitHub release. See
+[publishing](../../PUBLISHING.md) for package names and token permissions.
 
 To release manually, open **Actions → Release → Run workflow** and choose
 `patch`, `minor`, or `major`.
@@ -42,7 +42,7 @@ root `package.json` `packageManager` field. They run
 4. Configure:
    - **Name**: `github-actions-nestflow-js`
    - **Expiration**: 1 year (or longer)
-   - **Packages and scopes**: Select packages → `nestflow-js`
+   - **Packages and scopes**: Grant write access to `nestflow-js` and permission to create and publish packages in `@nestflow-js`.
    - **Permissions**: **Read and write**
    - **Automation**: ✅ Enable (bypasses 2FA)
 5. Copy the token (starts with `npm_...`)
