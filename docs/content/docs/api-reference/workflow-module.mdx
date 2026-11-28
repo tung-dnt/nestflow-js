@@ -67,6 +67,22 @@ You can also import a Nest module that exports the token. Without a provider, no
 
 `log()` receives structured facts such as a commit, receipt replay, or retry request. `trace()` receives one completed attempt with its start time, duration, and result. These records omit payloads, entity IDs, and raw errors. The orchestrator does not await the provider or pass it control of dispatch. A host that needs an active span around downstream calls can open it at the dispatch boundary.
 
+## Transition history
+
+Implement `WorkflowHistory` and register it under `WORKFLOW_HISTORY`. With a provider, the orchestrator builds a `WorkflowHistoryEntry` for each commit: workflow, event, event ID, URN, from and to states, outcome, attempt, commit time, and the handler error when the entity moved to its failed state. The entity service stores the entry in the receipt, and the result carries it as `history`, so durable checkpoints keep it too.
+
+```typescript
+WorkflowModule.register({
+  entities,
+  workflows,
+  providers: [{ provide: WORKFLOW_HISTORY, useClass: MyHistory }],
+});
+```
+
+`record(entry)` is optional. The orchestrator awaits it before returning the result, so a failure surfaces to the adapter, and redelivery replays the receipt and records the entry again. Deduplicate by URN and event ID. Omit `record()` when `list()` reads entries the host already stores, such as receipts or durable checkpoints. `list(urn, limit, cursor)` serves them back; authorize the entity first.
+
+Entries omit the event payload unless the workflow sets `history: { payload: true }`. Payloads can hold personal data and make every receipt larger.
+
 ## Architecture
 
 ```mermaid

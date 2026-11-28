@@ -33,16 +33,18 @@ import {
   type TransitionTrace,
   type WorkflowTelemetry,
 } from '../types/workflow-telemetry.interface';
-import {
-  WORKFLOW_HISTORY,
-  type TransitionCommitMetadata,
-  type WorkflowHistoryReader,
-} from '../types/workflow-recovery.interface';
+import { WORKFLOW_HISTORY, type WorkflowHistory, type WorkflowHistoryEntry } from '../types/workflow-history.interface';
 import { StateRouterHelperFactory } from './router.factory';
 
 function transitionFailure(message: string, cause: unknown, storageError: unknown): AggregateError {
   const diagnostic = cause instanceof Error ? `${message}: ${cause.message}` : message;
   return new AggregateError([cause, storageError], diagnostic, { cause });
+}
+
+function errorSummary(cause: unknown): NonNullable<WorkflowHistoryEntry['error']> {
+  return cause instanceof Error
+    ? { name: cause.name, message: cause.message }
+    : { name: 'Error', message: String(cause) };
 }
 
 /**
@@ -64,7 +66,7 @@ export class OrchestratorService implements OnModuleInit {
     private readonly routerHelperFactory: StateRouterHelperFactory,
     private readonly moduleRef: ModuleRef,
     @Optional() @Inject(WORKFLOW_TELEMETRY) private readonly telemetry?: WorkflowTelemetry,
-    @Optional() @Inject(WORKFLOW_HISTORY) private readonly history?: WorkflowHistoryReader,
+    @Optional() @Inject(WORKFLOW_HISTORY) private readonly history?: WorkflowHistory,
   ) {}
 
   onModuleInit() {
@@ -214,6 +216,7 @@ export class OrchestratorService implements OnModuleInit {
     let receipt: TransitionReceipt<unknown>;
     if (claim.kind === 'completed') {
       receipt = claim.receipt;
+      await this.recordHistory(receipt);
       if (context) {
         const outcome = receipt.completion.kind;
         this.sendTelemetry(() => this.telemetry?.log({ ...context, kind: 'receipt_replayed', outcome }));
@@ -257,13 +260,21 @@ export class OrchestratorService implements OnModuleInit {
         }
 
         const targetState = completion.kind === 'applied' ? transition.to : definition.states.failed;
+        const history: WorkflowHistoryEntry | undefined = this.history && {
+          workflow: definition.name,
+          event,
+          eventId,
+          urn,
+          from: state,
+          to: targetState,
+          outcome: completion.kind,
+          attempt: params.attempt,
+          committedAtMs: Date.now(),
+          ...(handlerFailure && { error: errorSummary(handlerFailure.cause) }),
+          ...(definition.history?.payload && { payload }),
+        };
         try {
-          receipt = await claim.commit(
-            targetState,
-            completion,
-            { workflow: definition.name, event, eventId, urn, from: state },
-            this.history && true,
-          );
+          receipt = await claim.commit(targetState, completion, history);
           committed = true;
         } catch (error) {
           if (context) this.sendTelemetry(() => this.telemetry?.log({ ...context, kind: 'commit_unconfirmed' }));
@@ -282,6 +293,7 @@ export class OrchestratorService implements OnModuleInit {
           );
         }
         logger.log('Workflow transition committed', { urn, eventId, outcome: completion.kind });
+        await this.recordHistory(receipt);
         if (completion.kind === 'exhausted') throw handlerFailure?.cause;
       } catch (cause) {
         failure = { cause };
@@ -298,19 +310,13 @@ export class OrchestratorService implements OnModuleInit {
       }
     }
 
-    return this.resolveReceipt({ event, eventId, urn }, route, receipt);
+    const result = await this.resolveReceipt({ event, eventId, urn }, route, receipt);
+    return receipt.history ? { ...result, history: receipt.history } : result;
   }
 
-  /** Resolve committed work from a trusted storage provider without running the original handler. */
-  async resumeCommitted(
-    transition: TransitionCommitMetadata,
-    receipt: TransitionReceipt<unknown>,
-  ): Promise<TransitResult> {
-    const route = this.routes.get(transition.event);
-    if (!route || route.definition.name !== transition.workflow) {
-      throw new Error(`Cannot resume committed event ${transition.event} in workflow ${transition.workflow}`);
-    }
-    return this.resolveReceipt(transition, route, receipt);
+  /** Hand the entry to the host before the adapter sees the result, so redelivery retries it. */
+  private async recordHistory({ history }: TransitionReceipt<unknown>): Promise<void> {
+    if (history) await this.history?.record?.(history);
   }
 
   private async resolveReceipt(

@@ -13,7 +13,7 @@ The orchestrator uses [`IWorkflowEntity.claimTransition(urn, eventId)`](/docs/ap
 - If another owner holds a live claim, return `kind: 'busy'`. The orchestrator raises `ConflictException` (HTTP 409).
 - Otherwise, acquire a lease and return `kind: 'acquired'` with the entity snapshot, `commit()`, and `release()`.
 
-`commit(state, completion)` must verify the owner's token, persist the updated entity and receipt, and clear the claim in one atomic operation. After takeover, the earlier owner cannot commit. `release()` must only clear the caller's own claim.
+`commit(state, completion, history?)` must verify the owner's token, persist the updated entity and receipt, and clear the claim in one atomic operation. After takeover, the earlier owner cannot commit. `release()` must only clear the caller's own claim. Store `history` in the receipt when it is passed.
 
 The receipt must hold the entity snapshot as it was at commit, not a pointer to the latest entity state. Retain receipts for as long as events can be redelivered. Persist only serializable entity snapshots and handler output that are safe to store.
 
@@ -22,6 +22,8 @@ Coordinate any other writers of workflow state with the same claim. A separate `
 ## Recovery after a crash
 
 If the process crashes before commit, a later delivery can acquire the expired lease and run the handler again. An atomic commit does not guarantee exactly-once side effects. Use [`@EventId()`](/docs/api-reference/decorators#eventid) and the entity ID as a downstream idempotency key.
+
+If the process crashes after commit, the next delivery of the same event gets the receipt and continues from it without running the handler. Adapters must acknowledge the inbound event only after they hand off the result, such as publishing the next event. There is no separate recovery worker.
 
 See the [DynamoDB entity service](https://github.com/tung-dnt/nestflow-js/blob/main/examples/lambda-order-state-machine/src/order/order-entity.service.ts) for a storage-backed implementation.
 

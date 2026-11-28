@@ -126,11 +126,12 @@ Monitor in AWS Console:
 
 ### Invoke Lambda via AWS CLI
 
-Use the function alias ARN and a [pending order from the quick start](./QUICK_START.md#5-seed-and-process-an-order). Replace `YOUR_ACCOUNT` and `us-east-1` with the account and region from the deployment output. Durable functions must be invoked through a version or alias ARN.
+Use the function alias ARN and a [pending order from the quick start](./QUICK_START.md#5-seed-and-process-an-order). Replace `YOUR_ACCOUNT` and `us-east-1` with the account and region from the deployment output. Durable functions must be invoked through a version or alias ARN. Name the execution after the order ID: history and cancellation look the execution up by that name, and Lambda returns the existing execution when the same start is retried.
 
 ```bash
 aws lambda invoke \
   --cli-binary-format raw-in-base64-out \
+  --durable-execution-name 0195146b-1ab7-7dcd-9d26-60eb422f767d \
   --function-name arn:aws:lambda:us-east-1:YOUR_ACCOUNT:function:order-state-machine-dev-order-workflow:live \
   --payload '{"urn":"0195146b-1ab7-7dcd-9d26-60eb422f767d","initialEvent":"order.created","eventId":"approve-order-1","payload":{"approved":true}}' \
   output.json
@@ -163,27 +164,13 @@ The service gives each transition a 60-second lease with a random owner token. I
 
 The lease uses client timestamps. The transaction rejects a prior owner after takeover, but DynamoDB cannot enforce a wall-clock deadline using a caller-supplied time. Keep worker clocks synchronized and use one writable region. Handler work must finish comfortably within the lease or use a storage adapter that renews it. A crash before commit or an expired lease can cause the handler to run again. For external effects, have the downstream service enforce an idempotency key derived from the order ID, `@EventId()`, and the effect name.
 
-Receipt keys use `transition#` and a hash of the order ID and event ID. They do not include either raw ID. Each receipt stores the committed order snapshot and terminal outcome, including the return value on success. Keep handler results JSON-compatible and small. The snapshot, result, and attribute overhead must fit within DynamoDB's 400 KB limit per item. The sample does not expire receipts. Keep them at least as long as events can be redelivered or replayed. Deleting a receipt earlier removes deduplication for that event.
+Receipt keys use `transition#` and a hash of the order ID and event ID. They do not include either raw ID. Each receipt stores the committed order snapshot, the terminal outcome including the return value on success, and the transition's history entry. Keep handler results JSON-compatible and small. The snapshot, result, entry, and attribute overhead must fit within DynamoDB's 400 KB limit per item. The sample does not expire receipts. Keep them at least as long as events can be redelivered or replayed. Deleting a receipt earlier removes deduplication for that event.
 
-### History and recovery outside Durable Lambda
+### History and cancellation
 
-The `WorkflowRecords` index lists committed history by order. `OrderEntityService.listTransitions()` returns metadata, not request payloads. Authorize the order before calling it. Index reads are eventually consistent, and older receipts are not backfilled.
+`OrderExecutionService` serves the `WORKFLOW_HISTORY` port from the durable execution itself, with no extra table or index. Each `transit:` step checkpoint holds the transition's history entry. `list(orderId, limit, cursor)` reads them with `GetDurableExecutionHistory`, and `cancel(orderId)` calls `StopDurableExecution`. Set `ORDER_WORKFLOW_FUNCTION` to the function name or ARN wherever you call them, and grant that caller `lambda:ListDurableExecutionsByFunction`, `lambda:GetDurableExecutionHistory`, and `lambda:StopDurableExecution`. Authorize the order before returning its history.
 
-For a broker or server using this store, set `WORKFLOW_RECOVERY=true` for dispatchers. Do not enable it for the Durable Lambda example, which already owns continuation. Run the exported `recoverNextTransition()` in a host worker:
-
-```ts
-import { recoverNextTransition } from 'nestflow-js/adapter';
-
-await recoverNextTransition(orchestrator, orderEntityService, async (result) => {
-  if (result.status === 'continued') {
-    await broker.publish(result.nextEvent);
-  }
-});
-```
-
-The publisher must resolve only after the broker durably accepts the event. Preserve the event ID on delivery. If the worker dies before acknowledgement, another worker can take over after the lease expires; duplicate delivery is possible. Run the worker periodically, back off on failures, and alert on repeated errors. Use the outbox as the only continuation publisher when enabled. Idle and ambiguous transitions still need an external event; this worker does not create timers or callback registrations.
-
-Recovery evaluates continuation guards against the saved receipt with the currently deployed workflow definition. Keep those guards pure. Drain pending records before deploying incompatible transition definitions. The sample uses one pending-work partition; shard it if throughput exceeds a single DynamoDB partition.
+History lasts as long as the function's durable execution retention, 30 days in this stack. Copy entries elsewhere if you need them longer. `limit` caps durable history events per page, so a page can hold fewer entries. Entries omit event payloads unless the workflow sets `history: { payload: true }`.
 
 ## Project Structure
 
@@ -197,7 +184,8 @@ lambda-order-state-machine/
 │   │   ├── order.constant.ts         # Constants and enums
 │   │   ├── order.module.ts           # NestJS module
 │   │   ├── order.workflow.ts         # Workflow definition
-│   │   └── order-entity.service.ts   # Entity service
+│   │   ├── order-entity.service.ts   # Entity service
+│   │   └── order-execution.service.ts # Durable history and cancellation
 │   ├── lambda.ts                     # Durable Lambda handler
 │   └── main.ts                       # Local entry point
 ├── infra/

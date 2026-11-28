@@ -6,12 +6,6 @@ on:
       - main
       - develop
   pull_request:
-    branches:
-      - main
-      - develop
-      - feat/workflow-recovery
-      - chore/vite-build
-      - feat/payload-validators
 
 jobs:
   test:
