@@ -78,9 +78,13 @@ export abstract class InMemoryWorkflowEntity<
     return {
       kind: 'acquired',
       entity,
-      commit: (state, completion) =>
+      commit: (state, completion, history) =>
         defer(() => {
-          const receipt: TransitionReceipt<T> = { entity: { ...entity, [this.stateKey]: state }, completion };
+          const receipt: TransitionReceipt<T> = {
+            entity: { ...entity, [this.stateKey]: state },
+            completion,
+            ...(history && { history }),
+          };
           const snapshot = structuredClone(receipt);
           if (row.owner !== owner || this.rows.get(urn) !== row) {
             throw new Error(`Transition claim no longer owns entity ${urn}`);

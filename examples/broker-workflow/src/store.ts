@@ -1,20 +1,13 @@
 import { type Observable, defer } from 'rxjs';
 import { randomUUID } from 'node:crypto';
 import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
-import type {
-  IWorkflowEntity,
-  RecoveryClaim,
-  TransitionClaim,
-  TransitionReceipt,
-  WorkflowRecoveryStore,
-} from 'nestflow-js/core';
+import type { IWorkflowEntity, TransitionClaim, TransitionReceipt, WorkflowHistoryEntry } from 'nestflow-js/core';
 import pg, { type PoolClient } from 'pg';
 
 import type { Order, OrderState } from './order.workflow.js';
 
 type OrderRow = { id: unknown; status: unknown };
-type ReceiptRow = OrderRow & { outcome: unknown; output_json: unknown };
-type PendingRow = ReceiptRow & { workflow: unknown; event: unknown; event_id: unknown; from_status: unknown };
+type ReceiptRow = OrderRow & { outcome: unknown; output_json: unknown; history_json: unknown };
 
 function parseOrder({ id, status }: OrderRow): Order {
   if (
@@ -26,19 +19,22 @@ function parseOrder({ id, status }: OrderRow): Order {
   return { id, status };
 }
 
+function parseJson(json: unknown): unknown {
+  if (json !== null && typeof json !== 'string') throw new Error('Invalid workflow receipt JSON');
+  return json === null ? undefined : JSON.parse(json);
+}
+
 function parseReceipt(row: ReceiptRow): TransitionReceipt<Order> {
   const entity = parseOrder(row);
+  // Written only by commit() below from an orchestrator-built entry.
+  const history = parseJson(row.history_json) as WorkflowHistoryEntry | undefined;
   const kind = row.outcome;
   switch (kind) {
-    case 'applied': {
-      const json = row.output_json;
-      if (json !== null && typeof json !== 'string') throw new Error('Invalid workflow receipt output');
-      const output: unknown = json === null ? undefined : JSON.parse(json);
-      return { entity, completion: { kind, output } };
-    }
+    case 'applied':
+      return { entity, completion: { kind, output: parseJson(row.output_json) }, history };
     case 'unretriable':
     case 'exhausted':
-      return { entity, completion: { kind } };
+      return { entity, completion: { kind }, history };
     default:
       throw new Error('Invalid workflow receipt outcome');
   }
@@ -52,7 +48,7 @@ async function readReceipt(
   const {
     rows: [row],
   } = await client.query<ReceiptRow>(
-    `SELECT order_id AS id, to_status AS status, outcome, output_json
+    `SELECT order_id AS id, to_status AS status, outcome, output_json, history_json
        FROM workflow_transitions WHERE order_id = $1 AND event_id = $2`,
     [id, eventId],
   );
@@ -60,9 +56,7 @@ async function readReceipt(
 }
 
 @Injectable()
-export class PostgresOrderStore
-  implements IWorkflowEntity<Order, OrderState>, WorkflowRecoveryStore, OnApplicationShutdown
-{
+export class PostgresOrderStore implements IWorkflowEntity<Order, OrderState>, OnApplicationShutdown {
   private readonly pool;
 
   constructor() {
@@ -165,23 +159,22 @@ export class PostgresOrderStore
         return {
           kind: 'acquired',
           entity: parseOrder(row),
-          commit(status, completion, metadata) {
+          commit(status, completion, history) {
             return defer<Promise<TransitionReceipt<Order>>>(async () => {
               if (closed) throw new Error('Order transition claim is closed');
               const output = completion.kind === 'applied' ? completion.output : undefined;
               const outputJson = JSON.stringify(output);
-              if (output !== undefined && outputJson === undefined)
-                throw new Error('Workflow output is not JSON-serializable');
+              const historyJson = history && JSON.stringify(history);
+              if ((output !== undefined && outputJson === undefined) || (history && historyJson === undefined))
+                throw new Error('Workflow output or history is not JSON-serializable');
               await client.query('UPDATE workflow_orders SET status = $2 WHERE id = $1', [id, status]);
               const {
                 rows: [stored],
               } = await client.query<ReceiptRow>(
-                `INSERT INTO workflow_transitions
-               (order_id, event_id, workflow, event, from_status, to_status, outcome, output_json, available_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-                     CASE WHEN $7 = 'applied' THEN statement_timestamp() END)
-             RETURNING order_id AS id, to_status AS status, outcome, output_json`,
-                [id, eventId, metadata.workflow, metadata.event, metadata.from, status, completion.kind, outputJson],
+                `INSERT INTO workflow_transitions (order_id, event_id, to_status, outcome, output_json, history_json)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             RETURNING order_id AS id, to_status AS status, outcome, output_json, history_json`,
+                [id, eventId, status, completion.kind, outputJson, historyJson],
               );
               const receipt = parseReceipt(stored);
               await client.query('COMMIT');
@@ -196,57 +189,6 @@ export class PostgresOrderStore
         if (!closed) client.release(true);
         throw error;
       }
-    });
-  }
-
-  claimPending(): Observable<RecoveryClaim | undefined> {
-    return defer(async () => {
-      const owner = randomUUID();
-      // shortcut: fixed recovery lease may republish after a slow handoff, add renewal for longer publishes.
-      const {
-        rows: [row],
-      } = await this.pool.query<PendingRow>(
-        `WITH candidate AS (
-         SELECT order_id, event_id FROM workflow_transitions
-         WHERE available_at <= statement_timestamp()
-         ORDER BY available_at
-         LIMIT 1 FOR UPDATE SKIP LOCKED
-       )
-       UPDATE workflow_transitions AS w
-       SET available_at = statement_timestamp() + interval '5 seconds', recovery_owner = $1
-       FROM candidate AS c
-       WHERE w.order_id = c.order_id AND w.event_id = c.event_id
-       RETURNING w.order_id AS id, w.to_status AS status, w.outcome, w.output_json,
-                 w.workflow, w.event, w.event_id, w.from_status`,
-        [owner],
-      );
-      if (!row) return undefined;
-
-      const receipt = parseReceipt(row);
-      const { workflow, event, event_id: eventId, from_status: from } = row;
-      if (
-        receipt.completion.kind !== 'applied' ||
-        typeof workflow !== 'string' ||
-        typeof event !== 'string' ||
-        typeof eventId !== 'string' ||
-        typeof from !== 'string'
-      ) {
-        throw new Error('Invalid pending workflow transition');
-      }
-      const urn = receipt.entity.id;
-      return {
-        transition: { workflow, event, eventId, urn, from },
-        receipt,
-        acknowledge: () =>
-          defer(async () => {
-            const { rowCount } = await this.pool.query(
-              `UPDATE workflow_transitions SET available_at = NULL, recovery_owner = NULL
-           WHERE order_id = $1 AND event_id = $2 AND recovery_owner = $3 AND available_at > statement_timestamp()`,
-              [urn, eventId, owner],
-            );
-            if (rowCount !== 1) throw new Error('Workflow transition recovery lease expired or lost');
-          }),
-      };
     });
   }
 }

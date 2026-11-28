@@ -1,4 +1,5 @@
 import type { IWorkflowEvent } from '@/core';
+import { deliverWorkflowMessage, type WorkflowConsumer } from './broker-delivery';
 
 export interface AzureServiceBusAdapterOptions {
   /** An app-owned ServiceBusSender for workflow messages. */
@@ -6,7 +7,8 @@ export interface AzureServiceBusAdapterOptions {
   /** The name of the Functions app setting, not its secret value. */
   connection: string;
   queueName: string;
-  consume: (raw: unknown) => Promise<unknown>;
+  /** Resolves the transition result; the adapter publishes a continuation before the host completes the message. */
+  consume: WorkflowConsumer;
 }
 
 export interface AzureServiceBusAdapter {
@@ -37,7 +39,7 @@ export function createAzureServiceBusAdapter({
     const body = Buffer.isBuffer(message) ? decoder.decode(message) : message;
     const raw: unknown = typeof body === 'string' ? JSON.parse(body) : body;
     // The host completes on success and redelivers failures up to the queue's MaxDeliveryCount.
-    await consume(raw);
+    await deliverWorkflowMessage(consume, publish, raw);
   }
 
   return { publish, trigger: { connection, queueName, cardinality: 'one', autoCompleteMessages: true, handler } };

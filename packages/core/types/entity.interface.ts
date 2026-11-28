@@ -1,5 +1,12 @@
 import type { Observable } from 'rxjs';
-import type { TransitionCommitMetadata, WorkflowCancellationStore } from './workflow-recovery.interface';
+import type { WorkflowHistoryEntry } from './workflow-history.interface';
+
+/** Persistence methods return cold Observables that emit exactly once and complete on success. */
+export interface WorkflowCancellationStore {
+  /** Persist an idempotent stop request. Return false if the entity does not exist. */
+  request(urn: string | number): Observable<boolean>;
+  isRequested(urn: string | number): Observable<boolean>;
+}
 
 export type TransitionCompletion =
   | { kind: 'applied'; output: unknown }
@@ -9,6 +16,8 @@ export type TransitionCompletion =
 export interface TransitionReceipt<T> {
   entity: T;
   completion: TransitionCompletion;
+  /** Entry passed to `commit()`; later claims for the event return it unchanged. */
+  history?: WorkflowHistoryEntry;
 }
 
 export type TransitionClaim<T, State> =
@@ -22,8 +31,7 @@ export type TransitionClaim<T, State> =
       commit(
         state: State,
         completion: TransitionCompletion,
-        metadata: TransitionCommitMetadata,
-        recordHistory?: true,
+        history?: WorkflowHistoryEntry,
       ): Observable<TransitionReceipt<T>>;
       release(): Observable<void>;
     };

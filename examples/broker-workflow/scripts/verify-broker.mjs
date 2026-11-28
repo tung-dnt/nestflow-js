@@ -20,10 +20,12 @@ function worker(script, expectedSignal = null) {
     import assert from 'node:assert/strict';
     import { readFileSync, writeFileSync } from 'node:fs';
     import { join } from 'node:path';
-    import { setTimeout } from 'node:timers/promises';
     import { firstValueFrom } from 'rxjs';
-    import { closeApp, consume, createOrder, dispatchOne } from './dist/app.js';
+    import { deliverWorkflowMessage } from 'nestflow-js/adapter';
+    import { closeApp, consume, createOrder } from './dist/app.js';
     import { PostgresOrderStore } from './dist/store.js';
+    // The broker adapters acknowledge only after this resolves.
+    const deliver = (message, publish) => deliverWorkflowMessage(consume, publish, message);
 
     const directory = process.env.NESTFLOW_SMOKE_DIR;
     const read = (name) => JSON.parse(readFileSync(join(directory, name), 'utf8'));
@@ -60,6 +62,7 @@ async function status(urn) {
 }
 
 async function verify() {
+  // Crash after commit, before the continuation is published or the message is acknowledged.
   const submit = worker(`
     const [urn, otherUrn] = await Promise.all([createOrder(), createOrder()]);
     assert.notEqual(urn, otherUrn);
@@ -71,6 +74,7 @@ async function verify() {
   const input = read('input.json');
   assert.equal(await status(input.urn), 'submitted');
 
+  // The broker redelivers. Crash after publishing the continuation, before acknowledging.
   const firstPublish = worker(`
     const input = read('input.json');
     const store = new PostgresOrderStore();
@@ -89,7 +93,7 @@ async function verify() {
       await store.onApplicationShutdown();
     }
     await Promise.all([consume(input), consume(input)]);
-    await dispatchOne(async (event) => {
+    await deliver(input, async (event) => {
       write('first-publish.json', event);
       await crash();
     });
@@ -102,28 +106,16 @@ async function verify() {
   assert.notEqual(firstEvent.eventId, input.eventId);
   assert.equal(await status(input.urn), 'submitted');
 
-  const finish = worker(`await consume(read('first-publish.json'));`);
-  assert.equal(await status(input.urn), 'finished');
-
+  // The unacknowledged message arrives again and republishes the same continuation event ID.
   const redelivery = worker(`
-    const deadline = performance.now() + 10_000;
-    let published;
-    while (!published && performance.now() < deadline) {
-      await dispatchOne(async (event) => {
-        write('second-publish.json', event);
-        published = event;
-      });
-      if (!published) await setTimeout(50);
-    }
-    assert(published, 'The published but unacknowledged event must become available again');
-    await consume(published);
-    const unexpectedPublish = async () => assert.fail('A final order produced another event');
-    await dispatchOne(unexpectedPublish);
-    assert.equal(await dispatchOne(unexpectedPublish), false);
+    await deliver(read('input.json'), async (event) => write('second-publish.json', event));
+    const finalOrder = async () => assert.fail('A final order produced another event');
+    await deliver(read('second-publish.json'), finalOrder);
+    await deliver(read('second-publish.json'), finalOrder);
   `);
   assert.deepEqual(read('second-publish.json'), firstEvent);
   assert.equal(await status(input.urn), 'finished');
-  const output = submit + firstPublish + finish + redelivery;
+  const output = submit + firstPublish + redelivery;
   assert.equal(output.split(`Submitted order ${input.urn}`).length - 1, 1);
   assert.equal(output.split(`Finished order ${input.urn}`).length - 1, 1);
 }

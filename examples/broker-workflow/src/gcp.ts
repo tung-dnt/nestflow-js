@@ -1,14 +1,14 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { PubSub } from '@google-cloud/pubsub';
 import { createGcpPubSubAdapter } from 'nestflow-js/adapter';
-import { closeApp, consume, dispatchOne } from './app.js';
+import { closeApp, consume } from './app.js';
 
 const topicName = process.env.PUBSUB_TOPIC;
 const subscription = process.env.PUBSUB_SUBSCRIPTION;
 if (!topicName || !subscription) throw new Error('Set PUBSUB_TOPIC and the full PUBSUB_SUBSCRIPTION name');
 
 const pubsub = new PubSub();
-const { consumePush, publish } = createGcpPubSubAdapter({
+const { consumePush } = createGcpPubSubAdapter({
   topic: pubsub.topic(topicName, { gaxOpts: { timeout: 5_000, retry: null } }),
   subscription,
   consume,
@@ -20,15 +20,7 @@ async function respond(request: IncomingMessage, response: ServerResponse): Prom
     response.writeHead(405, { Allow: 'POST' }).end();
     return;
   }
-  // Require Cloud Run IAM authentication for both routes; never deploy this service with public access.
-  if (request.url === '/outbox') {
-    const deadline = performance.now() + 10_000;
-    for (let count = 0; count < 20 && performance.now() < deadline; count++) {
-      if (!(await dispatchOne(publish))) break;
-    }
-    response.writeHead(204).end();
-    return;
-  }
+  // Require Cloud Run IAM authentication; never deploy this service with public access.
   if (request.url !== '/pubsub') {
     response.writeHead(404).end();
     return;

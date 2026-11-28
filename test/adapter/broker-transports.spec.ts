@@ -7,7 +7,8 @@ import {
   InvalidWorkflowMessageError,
   type RabbitMQChannel,
 } from '@/adapter';
-import type { IWorkflowEvent } from '@/core';
+import type { IWorkflowEvent, TransitResult } from '@/core';
+import { WorkflowCancelledException } from '@/exception';
 import { describe, expect, test, vi } from 'vite-plus/test';
 
 const event = {
@@ -17,6 +18,7 @@ const event = {
   attempt: 0,
   payload: { name: 'cà phê' },
 } satisfies IWorkflowEvent<unknown>;
+const finalResult: TransitResult = { status: 'final', state: 'done' };
 const content = Buffer.from(JSON.stringify(event));
 const queue = 'orders';
 const subscription = 'projects/test/subscriptions/orders';
@@ -78,7 +80,7 @@ describe('RabbitMQ transport', () => {
     const { channel } = rabbitChannel();
     const message = { content };
     channel.get.mockResolvedValueOnce(message);
-    const commit = Promise.withResolvers<void>();
+    const commit = Promise.withResolvers<TransitResult>();
     const consume = vi.fn(() => commit.promise);
     const delivery = createRabbitMQAdapter({ channel, queue, consume }).consumeOne();
     await setImmediate();
@@ -86,10 +88,44 @@ describe('RabbitMQ transport', () => {
     expect(consume).toHaveBeenCalledExactlyOnceWith(event);
     expect(channel.ack).not.toHaveBeenCalled();
 
-    commit.resolve();
+    commit.resolve(finalResult);
     await expect(delivery).resolves.toBe(true);
     expect(channel.ack).toHaveBeenCalledExactlyOnceWith(message);
     expect(channel.reject).not.toHaveBeenCalled();
+  });
+
+  test('drops cancelled work, publishes the continuation before acknowledging, and requeues a failed handoff', async () => {
+    const { channel } = rabbitChannel();
+    const next = { ...event, event: 'order.finish', eventId: 'continuation-1' };
+    const message = { content };
+    channel.get.mockResolvedValue(message);
+    channel.sendToQueue
+      .mockImplementation((_queue, _body, _options, confirm) => {
+        confirm(undefined);
+        return true;
+      })
+      .mockImplementationOnce((_queue, _body, _options, confirm) => {
+        confirm(new Error('broker unavailable'));
+        return true;
+      });
+    const consume = vi
+      .fn<(raw: unknown) => Promise<TransitResult>>()
+      .mockResolvedValue({ status: 'continued', nextEvent: next })
+      .mockRejectedValueOnce(new WorkflowCancelledException());
+    const { consumeOne } = createRabbitMQAdapter({ channel, queue, consume });
+
+    await expect(consumeOne()).resolves.toBe(true);
+    expect(channel.ack).toHaveBeenCalledExactlyOnceWith(message);
+    await expect(consumeOne()).rejects.toThrow('broker unavailable');
+    expect(channel.reject).toHaveBeenCalledExactlyOnceWith(message, true);
+    await expect(consumeOne()).resolves.toBe(true);
+    expect(channel.sendToQueue).toHaveBeenLastCalledWith(
+      queue,
+      Buffer.from(JSON.stringify(next)),
+      expect.anything(),
+      expect.any(Function),
+    );
+    expect(channel.ack).toHaveBeenCalledTimes(2);
   });
 
   test('dead-letters malformed input and requeues transient failures', async () => {
@@ -125,7 +161,7 @@ describe('Azure Service Bus transport', () => {
     const invalid = new InvalidWorkflowMessageError('Missing eventId');
     const consume = vi
       .fn()
-      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(finalResult)
       .mockRejectedValueOnce(unavailable)
       .mockRejectedValueOnce(invalid);
     const { trigger } = createAzureServiceBusAdapter({
@@ -166,7 +202,7 @@ describe('Azure Service Bus transport', () => {
 
 describe('Google Pub/Sub transport', () => {
   test('acknowledges a valid wrapped push without substituting the Pub/Sub message ID', async () => {
-    const consume = vi.fn().mockResolvedValue(undefined);
+    const consume = vi.fn().mockResolvedValue(finalResult);
     const { consumePush } = createGcpPubSubAdapter({ topic: { publishMessage: vi.fn() }, subscription, consume });
     const body = { subscription, message: { messageId: 'google-assigned-id', data: content.toString('base64') } };
     await expect(consumePush(body)).resolves.toBe(204);

@@ -335,20 +335,13 @@ test('in-memory claims isolate snapshots and reject a stale owner after reacquis
   const second = await firstValueFrom(store.claimTransition(submit.urn, submit.eventId));
   if (second.kind !== 'acquired') throw new Error(`Expected an acquired claim, got ${second.kind}`);
   expect(second.entity.notes).toEqual([]);
-  const metadata = {
-    urn: submit.urn,
-    eventId: submit.eventId,
-    event: submit.event,
-    workflow: 'OrderWorkflow',
-    from: 'pending',
-  };
-  await expect(firstValueFrom(first.commit('done', { kind: 'applied', output: null }, metadata))).rejects.toThrow();
+  await expect(firstValueFrom(first.commit('done', { kind: 'applied', output: null }))).rejects.toThrow();
   await firstValueFrom(first.release());
   await expect(firstValueFrom(store.claimTransition(submit.urn, 'another-event'))).resolves.toEqual({ kind: 'busy' });
 
   second.entity.notes.push('committed');
   const output = { approved: true };
-  const committed = await firstValueFrom(second.commit('review', { kind: 'applied', output }, metadata));
+  const committed = await firstValueFrom(second.commit('review', { kind: 'applied', output }));
   committed.entity.notes.push('outside receipt');
   output.approved = false;
   const stored = await firstValueFrom(store.load(submit.urn));

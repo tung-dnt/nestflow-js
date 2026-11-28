@@ -23,24 +23,23 @@ Use the in-process runner for a local tool, a test service, or work you can affo
 
 Choose a broker when several replicas must process work or new workers must finish work left by a stopped worker. In the [broker example](https://github.com/tung-dnt/nestflow-js/tree/main/examples/broker-workflow), PostgreSQL owns the entity and RabbitMQ carries events. One message triggers one logical transition, not the whole workflow.
 
-1. The worker obtains the entity's [transition claim](/docs/concepts/entity-service) before running the handler. On success, the store commits the new state, event receipt, and pending handoff in the same transaction.
-2. The worker acknowledges the inbound message after processing succeeds. If it dies before acknowledging, redelivery uses the **original workflow event ID** to find the receipt.
-3. The dispatcher calls `recoverNextTransition` and publishes `result.nextEvent` only for `continued`. It acknowledges the pending handoff after the broker confirms publication. If the dispatcher dies between publish and acknowledgement, the duplicate carries the same event ID. The dispatcher must run even if no new messages arrive.
+1. The worker obtains the entity's [transition claim](/docs/concepts/entity-service) before running the handler. On success, the store commits the new state and event receipt in the same transaction.
+2. The worker publishes `result.nextEvent` for a `continued` result, then acknowledges the inbound message. If it dies before acknowledging, redelivery uses the **original workflow event ID** to find the receipt, skips the handler, and publishes the same continuation event ID again.
 
-The pending handoff is a **transactional outbox**. Without it, a worker can commit the new state, die before publishing the continuation, and strand the workflow. Preserve receipts for at least the redelivery and replay window. Use the entity ID and event ID as an idempotency key for external effects. A payment call can succeed even if the worker dies before committing its receipt.
+The receipt and the late acknowledgement replace an outbox: the inbound message stays on the broker until its continuation is. Preserve receipts for at least the redelivery and replay window. Use the entity ID and event ID as an idempotency key for external effects. A payment call can succeed even if the worker dies before committing its receipt.
 
 `idle` and `no_transition` require a new external event. The broker adapters do not schedule a timeout from the result's `timeout` field. If a deadline changes business state, persist the deadline and arrange delivery of an explicit timeout event. Configure bounded broker redelivery and a dead-letter destination for invalid or exhausted messages. Keep handler attempts and their backoff within the host's execution and message-lock limits.
 
 ## AWS serverless
 
-Choose [Durable Lambda](/docs/plugins/durable-lambda) when you need managed checkpoints, durable retry delays, or callback waits. Pass `withDurableExecution` into `DurableLambdaEventHandler`. AWS owns execution history. Your entity service still owns transition claims and receipts. Do not also dispatch the same workflow's continuations from an outbox worker. See the [Lambda order example](/docs/examples/lambda-order-state-machine).
+Choose [Durable Lambda](/docs/plugins/durable-lambda) when you need managed checkpoints, durable retry delays, or callback waits. Pass `withDurableExecution` into `DurableLambdaEventHandler`. AWS owns execution history; the Lambda example reads transition history and cancels through the durable execution APIs. Your entity service still owns transition claims and receipts. See the [Lambda order example](/docs/examples/lambda-order-state-machine).
 
 ## Azure serverless
 
-Use the [Service Bus trigger](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-service-bus-trigger) when a Function should handle one queue message and exit. The example shares the same workflow and PostgreSQL store with the container worker. The timer trigger keeps pending handoffs moving when the queue is empty. Size the database connection pool for the maximum number of function instances. This adapter does not use Azure Durable Functions or provide its execution history.
+Use the [Service Bus trigger](https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-service-bus-trigger) when a Function should handle one queue message and exit. The example shares the same workflow and PostgreSQL store with the container worker. Size the database connection pool for the maximum number of function instances. This adapter does not use Azure Durable Functions or provide its execution history.
 
 ## Google Cloud serverless
 
-Use an [authenticated Pub/Sub push subscription](https://cloud.google.com/pubsub/docs/authenticate-push-subscriptions) with Cloud Run. A successful HTTP response acknowledges the push. Return it only after processing succeeds. Grant the push identity permission to invoke the service and grant the service identity permission to publish continuations. Use an authenticated Cloud Scheduler request for outbox dispatch. Do not depend on a background loop in a service that can scale to zero. This adapter does not use Google Cloud Workflows.
+Use an [authenticated Pub/Sub push subscription](https://cloud.google.com/pubsub/docs/authenticate-push-subscriptions) with Cloud Run. A successful HTTP response acknowledges the push. The adapter returns it only after processing and the continuation publish succeed. Grant the push identity permission to invoke the service and grant the service identity permission to publish continuations. This adapter does not use Google Cloud Workflows.
 
 See the [adapter contracts](/docs/api-reference/adapters) for result handling and [the broker example](https://github.com/tung-dnt/nestflow-js/tree/main/examples/broker-workflow) for the host entry points.

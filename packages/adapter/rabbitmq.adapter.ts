@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { IWorkflowEvent } from '@/core';
+import { deliverWorkflowMessage, type WorkflowConsumer } from './broker-delivery';
 import { InvalidWorkflowMessageError } from './message-workflow.adapter';
 
 interface RabbitMQDelivery {
@@ -23,7 +24,8 @@ export interface RabbitMQChannel<Delivery extends RabbitMQDelivery> {
 export interface RabbitMQAdapterOptions<Delivery extends RabbitMQDelivery> {
   channel: RabbitMQChannel<Delivery>;
   queue: string;
-  consume: (raw: unknown) => Promise<unknown>;
+  /** Resolves the transition result; the adapter publishes a continuation before it acknowledges. */
+  consume: WorkflowConsumer;
 }
 
 export interface RabbitMQAdapter {
@@ -75,7 +77,7 @@ export function createRabbitMQAdapter<Delivery extends RabbitMQDelivery>({
     }
 
     try {
-      await consume(raw);
+      await deliverWorkflowMessage(consume, publish, raw);
     } catch (error) {
       const invalid = error instanceof InvalidWorkflowMessageError;
       channel.reject(message, !invalid);

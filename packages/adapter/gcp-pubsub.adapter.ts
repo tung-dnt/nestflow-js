@@ -1,4 +1,5 @@
 import type { IWorkflowEvent } from '@/core';
+import { deliverWorkflowMessage, type WorkflowConsumer } from './broker-delivery';
 import { InvalidWorkflowMessageError } from './message-workflow.adapter';
 
 export interface GcpPubSubAdapterOptions {
@@ -6,7 +7,8 @@ export interface GcpPubSubAdapterOptions {
   topic: { publishMessage(message: { data: Buffer }): Promise<string> };
   /** The full push subscription name, projects/PROJECT/subscriptions/SUBSCRIPTION. */
   subscription: string;
-  consume: (raw: unknown) => Promise<unknown>;
+  /** Resolves the transition result; the adapter publishes a continuation before it acknowledges. */
+  consume: WorkflowConsumer;
 }
 
 export interface GcpPubSubAdapter {
@@ -49,7 +51,7 @@ export function createGcpPubSubAdapter({ topic, subscription, consume }: GcpPubS
       return 400;
     }
     try {
-      await consume(raw);
+      await deliverWorkflowMessage(consume, publish, raw);
     } catch (error) {
       if (error instanceof InvalidWorkflowMessageError) return 400;
       throw error;

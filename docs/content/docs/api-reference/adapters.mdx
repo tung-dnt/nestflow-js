@@ -35,9 +35,8 @@ Import these functions from `nestflow-js/adapter`. They return cold, single-resu
 
 - `runInProcess(orchestrator, event)` follows automatic continuations. It returns when the result is `final`, `idle`, or `no_transition`. To resume a paused workflow, submit a new event for the same entity.
 - `processWorkflowMessage(orchestrator, raw)` validates the decoded workflow envelope and executes one logical transition, including configured handler retries. It returns the result without publishing or acknowledging a message.
-- `recoverNextTransition(orchestrator, store, deliver)` claims a pending committed transition and derives its result without rerunning the original handler. It acknowledges the claim only after `deliver(result)` emits `undefined` to confirm durable handoff. It emits `false` when the store offers no work.
 
-Each broker factory accepts an async `consume` callback. Pass `raw => firstValueFrom(processWorkflowMessage(orchestrator, raw))` when the entity store commits pending work in the transition transaction. A separate dispatcher publishes automatic continuations. The factory does not open connections or start a polling process.
+Each broker factory accepts an async `consume` callback that resolves the transition result. Pass `raw => firstValueFrom(processWorkflowMessage(orchestrator, raw))`. The factory publishes a `continued` result's `nextEvent` before it acknowledges the inbound message, and drops a message whose entity is cancelled. A crash between commit and acknowledgement redelivers the message, which replays the receipt and republishes the same continuation event ID. For a custom broker, call `deliverWorkflowMessage(consume, publish, raw)` and acknowledge only after it resolves. The factory does not open connections or start a polling process.
 
 | Factory and options | Inbound delivery | Outbound delivery |
 | --- | --- | --- |

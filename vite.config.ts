@@ -33,8 +33,8 @@ export default defineConfig({
     overrides: [
       {
         files: [
-          'packages/core/types/{entity,workflow-recovery}.interface.ts',
-          'packages/adapter/{in-memory-workflow-entity,message-workflow.adapter,workflow-recovery}.ts',
+          'packages/core/types/{entity,workflow-history}.interface.ts',
+          'packages/adapter/{in-memory-workflow-entity,message-workflow.adapter}.ts',
         ],
         plugins: ['oxc', 'typescript'],
         rules: {

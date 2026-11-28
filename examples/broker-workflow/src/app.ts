@@ -1,9 +1,9 @@
 import 'reflect-metadata';
 import { Module, type INestApplicationContext } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { processWorkflowMessage, recoverNextTransition } from 'nestflow-js/adapter';
-import { OrchestratorService, WorkflowModule, type IWorkflowEvent } from 'nestflow-js/core';
-import { defer, firstValueFrom, of } from 'rxjs';
+import { processWorkflowMessage } from 'nestflow-js/adapter';
+import { OrchestratorService, WorkflowModule, type TransitResult } from 'nestflow-js/core';
+import { firstValueFrom } from 'rxjs';
 
 import { ORDER_ENTITY, OrderWorkflow } from './order.workflow.js';
 import { PostgresOrderStore } from './store.js';
@@ -41,18 +41,10 @@ function getApp() {
   return (app ??= startApp());
 }
 
-export async function consume(raw: unknown): Promise<void> {
+/** Run one transition. The transport adapter publishes a continuation before it acknowledges the message. */
+export async function consume(raw: unknown): Promise<TransitResult> {
   const { orchestrator } = await getApp();
-  await firstValueFrom(processWorkflowMessage(orchestrator, raw));
-}
-
-export async function dispatchOne(publish: (event: IWorkflowEvent) => Promise<void>): Promise<boolean> {
-  const { orchestrator, store } = await getApp();
-  return firstValueFrom(
-    recoverNextTransition(orchestrator, store, (result) =>
-      result.status === 'continued' ? defer(() => publish(result.nextEvent)) : of(undefined),
-    ),
-  );
+  return firstValueFrom(processWorkflowMessage(orchestrator, raw));
 }
 
 export async function createOrder(): Promise<string> {

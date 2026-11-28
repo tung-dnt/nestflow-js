@@ -30,7 +30,7 @@ try {
 } finally { await closeApp(); }'
 ```
 
-The worker handles `order.submit`. A separate dispatcher delivers `order.finish` using the stable event ID in the committed continuation. Do not start different host examples against the same outbox unless they are meant to share one transport.
+The worker handles `order.submit`, publishes the committed `order.finish` continuation, and only then acknowledges the message. If the worker dies between commit and acknowledgement, the broker redelivers the message. The redelivery replays the stored receipt without running the handler again and republishes the continuation with the same event ID. There is no outbox or dispatcher to run.
 
 ## RabbitMQ in a container
 
@@ -41,13 +41,13 @@ docker compose -f examples/broker-workflow/compose.yaml up --build -d
 docker compose -f examples/broker-workflow/compose.yaml run --rm worker node dist/container.js seed
 ```
 
-Compose supplies `AMQP_URL` and `DATABASE_URL`. The worker consumes `RABBITMQ_QUEUE` (default `nestflow-workflow`), and its dispatcher publishes committed continuations. Use `docker compose -f examples/broker-workflow/compose.yaml down` to stop this stack.
+Compose supplies `AMQP_URL` and `DATABASE_URL`. The worker consumes `RABBITMQ_QUEUE` (default `nestflow-workflow`) and publishes each continuation before it acknowledges the message. Use `docker compose -f examples/broker-workflow/compose.yaml down` to stop this stack.
 
 ## Azure Functions and Service Bus
 
 Create a Service Bus queue. Set `SERVICE_BUS_QUEUE` to its name and `ServiceBusConnection` to a connection string scoped to send and listen on that queue. Set `DATABASE_URL`, `AzureWebJobsStorage`, and `FUNCTIONS_WORKER_RUNTIME=node` in the function app settings. Use the platform's secret store. Do not commit connection strings.
 
-For local development, run `func start` from `examples/broker-workflow` after compiling. The v4 Node worker loads `dist/azure.js` through the package `main`. Send the initial event as a JSON message body. The Service Bus trigger handles the message, and the timer trigger dispatches outbox records independently. Set a maximum delivery count and monitor the queue's dead-letter subqueue. For deployment, stage the compiled app, `host.json`, and production dependencies together rather than copying a workspace symlink.
+For local development, run `func start` from `examples/broker-workflow` after compiling. The v4 Node worker loads `dist/azure.js` through the package `main`. Send the initial event as a JSON message body. The Service Bus trigger handles the message and sends its continuation before the host completes it. Set a maximum delivery count and monitor the queue's dead-letter subqueue. For deployment, stage the compiled app, `host.json`, and production dependencies together rather than copying a workspace symlink.
 
 ## Cloud Run and Pub/Sub
 
@@ -55,7 +55,6 @@ Run the example image with `node dist/gcp.js` on a Cloud Run service that requir
 
 - Configure a wrapped Pub/Sub push subscription to `POST /pubsub`. Set the OIDC audience to the service URL. Grant its push identity `roles/run.invoker` on the service.
 - Grant the service identity permission to publish to the continuation topic. Attach a dead-letter policy to the subscription and grant the Pub/Sub service agent the [required permissions](https://cloud.google.com/pubsub/docs/dead-letter-topics).
-- Schedule authenticated `POST /outbox` requests with Cloud Scheduler. Set the service URL as the audience and grant the scheduler identity permission to invoke the service. Cloud Run IAM controls access to the **whole service**, not individual paths. Use trusted invoker identities only.
 - Publish the initial event's JSON as the message data. Pub/Sub supplies the base64 push envelope. Do not wrap or encode the event a second time.
 
 The PostgreSQL example holds a row lock and a database connection while a handler runs. Use short handlers and bound worker concurrency to the connection budget across replicas.

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout } from 'node:timers/promises';
 import amqp from 'amqplib';
 import { createRabbitMQAdapter } from 'nestflow-js/adapter';
-import { closeApp, consume, createOrder, dispatchOne } from './app.js';
+import { closeApp, consume, createOrder } from './app.js';
 
 async function run(): Promise<void> {
   const mode = process.argv[2];
@@ -49,10 +49,13 @@ async function run(): Promise<void> {
     process.once('SIGTERM', stop);
     try {
       while (!stopping && !channelClosed && !connectionClosed) {
-        const [sent, received] = await Promise.allSettled([dispatchOne(publish), consumeOne()]);
-        if (sent.status === 'rejected') console.error('Outbox dispatch failed', sent.reason);
-        if (received.status === 'rejected') console.error('Workflow delivery failed', received.reason);
-        if (sent.status === 'rejected' || received.status === 'rejected' || !(sent.value || received.value)) {
+        let received = false;
+        try {
+          received = await consumeOne();
+        } catch (error) {
+          console.error('Workflow delivery failed', error);
+        }
+        if (!received) {
           await setTimeout(500);
         }
       }
