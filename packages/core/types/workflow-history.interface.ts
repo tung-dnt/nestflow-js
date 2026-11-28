@@ -1,3 +1,4 @@
+import type { Observable } from 'rxjs';
 import type { TransitionCompletion } from './entity.interface';
 
 export const WORKFLOW_HISTORY = Symbol('WORKFLOW_HISTORY');
@@ -25,12 +26,13 @@ export interface WorkflowHistoryPage {
 }
 
 /**
- * Host-provided transition history. `record()` receives each committed entry at least
- * once, before the adapter sees the result; deduplicate by `urn` and `eventId`. Omit it
- * when `list()` reads entries the host already stores, such as receipts or durable checkpoints.
+ * Host-provided transition history. Methods return cold Observables that emit once.
+ * `record()` receives each committed entry at least once, before the adapter sees the
+ * result; deduplicate by `urn` and `eventId`. Omit it when `list()` reads entries the
+ * host already stores, such as receipts or durable checkpoints.
  */
 export interface WorkflowHistory {
-  record?(entry: WorkflowHistoryEntry): Promise<void>;
+  record?(entry: WorkflowHistoryEntry): Observable<void>;
   /** `limit` caps one storage page, so a page can hold fewer entries. */
-  list(urn: string | number, limit: number, cursor?: string): Promise<WorkflowHistoryPage>;
+  list(urn: string | number, limit: number, cursor?: string): Observable<WorkflowHistoryPage>;
 }

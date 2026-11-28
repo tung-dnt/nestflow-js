@@ -23,7 +23,7 @@ export const handler = DurableLambdaEventHandler(app, withDurableExecution);
 
 ## Execution loop
 
-The adapter checkpoints each `transitAttempt()` call with `ctx.step()`. The adapter, not the SDK's step retry policy, controls handler retries.
+The adapter subscribes to each `transitAttempt()` Observable with `firstValueFrom` inside `ctx.step()`. The SDK checkpoints the result, not the Observable. The adapter, not the SDK's step retry policy, controls handler retries.
 
 ```mermaid
 flowchart TD

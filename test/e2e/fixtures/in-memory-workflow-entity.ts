@@ -1,5 +1,5 @@
 import { InMemoryWorkflowEntity as MemoryStore } from '@/adapter/in-memory-workflow-entity';
-import type { TransitionClaim } from '@/core';
+import { defer, map } from 'rxjs';
 
 export abstract class InMemoryWorkflowEntity<T extends { id: string }, StateKey extends keyof T> extends MemoryStore<
   T,
@@ -12,17 +12,21 @@ export abstract class InMemoryWorkflowEntity<T extends { id: string }, StateKey 
     super(stateKey);
   }
 
-  override async claimTransition(urn: string | number, eventId: string): Promise<TransitionClaim<T, T[StateKey]>> {
-    const claim = await super.claimTransition(urn, eventId);
-    const beforeCommit = this.beforeCommit;
-    if (claim.kind !== 'acquired' || !beforeCommit) return claim;
-    return {
-      ...claim,
-      commit: async (...args) => {
-        beforeCommit(args[0]);
-        return claim.commit(...args);
-      },
-    };
+  override claimTransition(urn: string | number, eventId: string) {
+    return super.claimTransition(urn, eventId).pipe(
+      map((claim) => {
+        const beforeCommit = this.beforeCommit;
+        if (claim.kind !== 'acquired' || !beforeCommit) return claim;
+        return {
+          ...claim,
+          commit: (...args: Parameters<typeof claim.commit>) =>
+            defer(() => {
+              beforeCommit(args[0]);
+              return claim.commit(...args);
+            }),
+        };
+      }),
+    );
   }
 
   override clear(): void {

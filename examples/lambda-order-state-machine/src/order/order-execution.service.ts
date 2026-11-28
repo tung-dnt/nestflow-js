@@ -6,6 +6,7 @@ import {
 } from '@aws-sdk/client-lambda';
 import { Injectable } from '@nestjs/common';
 import type { TransitResult, WorkflowHistory, WorkflowHistoryEntry, WorkflowHistoryPage } from 'nestflow-js/core';
+import { defer, type Observable } from 'rxjs';
 
 const lambda = new LambdaClient({});
 
@@ -16,34 +17,38 @@ const lambda = new LambdaClient({});
  */
 @Injectable()
 export class OrderExecutionService implements WorkflowHistory {
-  async list(urn: string | number, limit: number, cursor?: string): Promise<WorkflowHistoryPage> {
-    const executionArn = await this.findExecution(urn);
-    if (!executionArn) return { entries: [] };
-    const page = await lambda.send(
-      new GetDurableExecutionHistoryCommand({
-        DurableExecutionArn: executionArn,
-        IncludeExecutionData: true,
-        MaxItems: limit,
-        Marker: cursor,
-      }),
-    );
-    const entries: WorkflowHistoryEntry[] = [];
-    for (const event of page.Events ?? []) {
-      const result = event.StepSucceededDetails?.Result;
-      if (!result || !event.Name?.startsWith('transit:')) continue;
-      if (result.Truncated) throw new Error(`Durable checkpoint ${event.Name} is truncated`);
-      const history = (JSON.parse(result.Payload ?? 'null') as TransitResult | null)?.history;
-      if (history) entries.push(history);
-    }
-    return { entries, cursor: page.NextMarker };
+  list(urn: string | number, limit: number, cursor?: string): Observable<WorkflowHistoryPage> {
+    return defer(async () => {
+      const executionArn = await this.findExecution(urn);
+      if (!executionArn) return { entries: [] };
+      const page = await lambda.send(
+        new GetDurableExecutionHistoryCommand({
+          DurableExecutionArn: executionArn,
+          IncludeExecutionData: true,
+          MaxItems: limit,
+          Marker: cursor,
+        }),
+      );
+      const entries: WorkflowHistoryEntry[] = [];
+      for (const event of page.Events ?? []) {
+        const result = event.StepSucceededDetails?.Result;
+        if (!result || !event.Name?.startsWith('transit:')) continue;
+        if (result.Truncated) throw new Error(`Durable checkpoint ${event.Name} is truncated`);
+        const history = (JSON.parse(result.Payload ?? 'null') as TransitResult | null)?.history;
+        if (history) entries.push(history);
+      }
+      return { entries, cursor: page.NextMarker };
+    });
   }
 
-  /** Stop the order's running or paused execution. Returns false if there is none. */
-  async cancel(urn: string | number): Promise<boolean> {
-    const executionArn = await this.findExecution(urn, true);
-    if (!executionArn) return false;
-    await lambda.send(new StopDurableExecutionCommand({ DurableExecutionArn: executionArn }));
-    return true;
+  /** Stop the order's running or paused execution. Emits false if there is none. */
+  cancel(urn: string | number): Observable<boolean> {
+    return defer(async () => {
+      const executionArn = await this.findExecution(urn, true);
+      if (!executionArn) return false;
+      await lambda.send(new StopDurableExecutionCommand({ DurableExecutionArn: executionArn }));
+      return true;
+    });
   }
 
   private async findExecution(urn: string | number, active = false): Promise<string | undefined> {

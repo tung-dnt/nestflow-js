@@ -1,3 +1,4 @@
+import { firstValueFrom } from 'rxjs';
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vite-plus/test';
 import { Test } from '@nestjs/testing';
 import { withDurableExecution, type DurableLambdaHandler } from '@aws/durable-execution-sdk-js';
@@ -44,8 +45,8 @@ describe('Durable Lambda Adapter — User Onboarding E2E', () => {
   });
 
   test('should walk REGISTRATION → EMAIL_VERIFICATION → PROFILE_SETUP → COMPLETED via callbacks', async () => {
-    const user = await entityService.create();
-    await entityService.update(user, OnboardingState.REGISTRATION);
+    const user = await firstValueFrom(entityService.create());
+    await firstValueFrom(entityService.update(user, OnboardingState.REGISTRATION));
 
     const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler });
 
@@ -79,13 +80,13 @@ describe('Durable Lambda Adapter — User Onboarding E2E', () => {
       state: OnboardingState.COMPLETED,
     });
 
-    const updatedUser = await entityService.load(user.id);
+    const updatedUser = await firstValueFrom(entityService.load(user.id));
     expect(entityService.status(updatedUser!)).toBe(OnboardingState.COMPLETED);
   });
 
   test('should handle abandonment at any idle state', async () => {
-    const user = await entityService.create();
-    await entityService.update(user, OnboardingState.REGISTRATION);
+    const user = await firstValueFrom(entityService.create());
+    await firstValueFrom(entityService.update(user, OnboardingState.REGISTRATION));
 
     const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler });
 
@@ -109,8 +110,8 @@ describe('Durable Lambda Adapter — User Onboarding E2E', () => {
   });
 
   test('should checkpoint transit operations', async () => {
-    const user = await entityService.create();
-    await entityService.update(user, OnboardingState.REGISTRATION);
+    const user = await firstValueFrom(entityService.create());
+    await firstValueFrom(entityService.update(user, OnboardingState.REGISTRATION));
 
     const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler });
 

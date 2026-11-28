@@ -185,12 +185,6 @@ importers:
 
   .:
     dependencies:
-      class-transformer:
-        specifier: ^0.5.1
-        version: 0.5.1
-      class-validator:
-        specifier: ^0.14.2
-        version: 0.14.4
       rxjs:
         specifier: ^7.8.0
         version: 7.8.2
@@ -295,6 +289,55 @@ importers:
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
+
+  examples/broker-workflow:
+    dependencies:
+      '@azure/functions':
+        specifier: ^4.17.1
+        version: 4.17.1
+      '@azure/service-bus':
+        specifier: ^7.10.0
+        version: 7.10.0
+      '@google-cloud/pubsub':
+        specifier: ^6.4.1
+        version: 6.4.1
+      '@nestjs/common':
+        specifier: ^12.6.2
+        version: 12.6.2(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core':
+        specifier: ^12.6.2
+        version: 12.6.2(@nestjs/common@12.6.2(class-transformer@0.5.1)(class-validator@0.14.4)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@12.6.2)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      amqplib:
+        specifier: ^0.10.9
+        version: 0.10.9
+      class-transformer:
+        specifier: ^0.5.1
+        version: 0.5.1
+      class-validator:
+        specifier: ^0.14.3
+        version: 0.14.4
+      nestflow-js:
+        specifier: workspace:*
+        version: link:../..
+      pg:
+        specifier: ^8.23.1
+        version: 8.23.1
+      reflect-metadata:
+        specifier: ^0.2.2
+        version: 0.2.2
+      rxjs:
+        specifier: ^7.8.2
+        version: 7.8.2
+    devDependencies:
+      '@types/amqplib':
+        specifier: ^0.10.8
+        version: 0.10.8
+      '@types/node':
+        specifier: 22.20.7
+        version: 22.20.7
+      '@types/pg':
+        specifier: ^8.23.1
+        version: 8.23.1
 
   examples/lambda-order-state-machine:
     dependencies:

@@ -28,6 +28,8 @@ Use Node.js 26 at the version pinned in [`.node-version`](.node-version). Use pn
 To enable the pre-commit hook, run `pnpm exec vp hooks enable` once per clone.
 The hook runs `pnpm check` against your working tree and blocks the commit if the check fails.
 
+`pnpm check` enforces Observable-only code in the persistence contracts, in-memory store, Node runner, and recovery adapter. Keep Promise conversions at host and SDK boundaries. TypeScript checks that storage implementations return Observables even when their drivers use Promises.
+
 Run `pnpm --dir docs dev` from the repository root to preview the docs.
 
 ## Project Structure

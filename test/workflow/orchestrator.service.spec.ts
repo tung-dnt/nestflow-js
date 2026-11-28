@@ -1,3 +1,4 @@
+import { firstValueFrom, type Observable, defer, of, map, throwError } from 'rxjs';
 import { DurableLambdaEventHandler, type DurableWorkflowEvent } from '@/adapter';
 import {
   EventId,
@@ -71,12 +72,12 @@ describe('Workflow transition regressions', () => {
   } = {}) {
     const event = createWorkflowEvent(eventName, orderUrn);
     class OrderStore extends InMemoryWorkflowEntity<Entity, 'state'> {
-      async create(id: string = orderUrn): Promise<Entity> {
-        return this.save({ id, state: 'pending' });
+      create(id: string = orderUrn): Observable<Entity> {
+        return defer(() => of(this.save({ id, state: 'pending' })));
       }
     }
     const store = new OrderStore('state', beforeCommit);
-    await store.create();
+    await firstValueFrom(store.create());
 
     @Workflow<Entity, string, State>({
       name: 'OrderWorkflow',
@@ -116,12 +117,46 @@ describe('Workflow transition regressions', () => {
   }
 
   describe('OrchestratorService', () => {
-    test('commits a valid transition and returns the terminal state', async () => {
-      const { app, event, orchestrator, store } = await createWorkflow();
+    test('runs on subscription and reuses the committed receipt on resubscription', async () => {
+      let effects = 0;
+      const { app, event, orchestrator, store } = await createWorkflow({
+        handle: async () => ++effects,
+      });
       await app.init();
 
-      expect(await orchestrator.transit(event)).toEqual({ status: 'final', state: 'done' });
-      expect((await store.load(event.urn))?.state).toBe('done');
+      const attempt = orchestrator.transit(event);
+      expect((await firstValueFrom(store.load(event.urn)))?.state).toBe('pending');
+      expect(effects).toBe(0);
+      expect(await firstValueFrom(attempt)).toEqual({ status: 'final', state: 'done' });
+      expect((await firstValueFrom(store.load(event.urn)))?.state).toBe('done');
+      expect(await firstValueFrom(attempt)).toEqual({ status: 'final', state: 'done' });
+      expect(effects).toBe(1);
+    });
+
+    test('unsubscribing stops delivery but lets a claimed attempt finish', async () => {
+      const started = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      const completed = Promise.withResolvers<void>();
+      const { app, event, orchestrator, store } = await createWorkflow({
+        handle: async () => {
+          started.resolve();
+          await finish.promise;
+        },
+        telemetry: { log: () => {}, trace: () => completed.resolve() },
+      });
+      await app.init();
+
+      const observer = { next: vi.fn(), error: vi.fn(), complete: vi.fn() };
+      const subscription = orchestrator.transit(event).subscribe(observer);
+      await started.promise;
+      subscription.unsubscribe();
+      finish.resolve();
+      await completed.promise;
+
+      expect((await firstValueFrom(store.load(event.urn)))?.state).toBe('done');
+      expect(observer.next).not.toHaveBeenCalled();
+      expect(observer.error).not.toHaveBeenCalled();
+      expect(observer.complete).not.toHaveBeenCalled();
     });
 
     test('blocks new claims and continuation but lets an already claimed handler commit', async () => {
@@ -135,29 +170,31 @@ describe('Workflow transition regressions', () => {
         },
       });
       await app.init();
-      const attempted = expect(orchestrator.transit(event)).rejects.toBeInstanceOf(WorkflowCancelledException);
+      const attempted = expect(firstValueFrom(orchestrator.transit(event))).rejects.toBeInstanceOf(
+        WorkflowCancelledException,
+      );
       await started.promise;
       try {
-        expect(await orchestrator.requestCancellation(event.event, event.urn)).toBe(true);
-        expect(await orchestrator.requestCancellation(event.event, event.urn)).toBe(true);
-        await expect(orchestrator.transit(createWorkflowEvent(event.event, event.urn))).rejects.toBeInstanceOf(
-          WorkflowCancelledException,
-        );
+        expect(await firstValueFrom(orchestrator.requestCancellation(event.event, event.urn))).toBe(true);
+        expect(await firstValueFrom(orchestrator.requestCancellation(event.event, event.urn))).toBe(true);
+        await expect(
+          firstValueFrom(orchestrator.transit(createWorkflowEvent(event.event, event.urn))),
+        ).rejects.toBeInstanceOf(WorkflowCancelledException);
       } finally {
         finish.resolve();
       }
       await attempted;
-      expect((await store.load(event.urn))?.state).toBe('review');
+      expect((await firstValueFrom(store.load(event.urn)))?.state).toBe('review');
     });
 
     test.each([false, true])('records each committed entry until the host accepts it, payload: %s', async (payload) => {
       let handlerCalls = 0;
       const record = vi
         .fn<NonNullable<WorkflowHistory['record']>>()
-        .mockRejectedValueOnce(new Error('History store unavailable'))
-        .mockResolvedValue();
+        .mockReturnValueOnce(throwError(() => new Error('History store unavailable')))
+        .mockReturnValue(of(undefined));
       const { app, event, orchestrator } = await createWorkflow({
-        history: { record, list: async () => ({ entries: [] }) },
+        history: { record, list: () => of({ entries: [] }) },
         historyOptions: { payload },
         handle: async () => {
           handlerCalls++;
@@ -166,8 +203,8 @@ describe('Workflow transition regressions', () => {
       await app.init();
       const input = { ...event, payload: { note: 'kept only on opt-in' } };
 
-      await expect(orchestrator.transit(input)).rejects.toThrow('History store unavailable');
-      const redelivered = await orchestrator.transit(input);
+      await expect(firstValueFrom(orchestrator.transit(input))).rejects.toThrow('History store unavailable');
+      const redelivered = await firstValueFrom(orchestrator.transit(input));
 
       const entry = record.mock.calls[0]?.[0];
       expect(entry).toMatchObject({ event: eventName, eventId: event.eventId, from: 'pending', to: 'done' });
@@ -179,16 +216,16 @@ describe('Workflow transition regressions', () => {
     });
 
     test('records the handler failure that moved the entity to the failed state', async () => {
-      const record = vi.fn<NonNullable<WorkflowHistory['record']>>().mockResolvedValue();
+      const record = vi.fn<NonNullable<WorkflowHistory['record']>>().mockReturnValue(of(undefined));
       const { app, event, orchestrator } = await createWorkflow({
-        history: { record, list: async () => ({ entries: [] }) },
+        history: { record, list: () => of({ entries: [] }) },
         handle: async () => {
           throw new UnretriableException('Card declined');
         },
       });
       await app.init();
 
-      expect(await orchestrator.transit(event)).toMatchObject({ status: 'final', state: 'failed' });
+      expect(await firstValueFrom(orchestrator.transit(event))).toMatchObject({ status: 'final', state: 'failed' });
       expect(record).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           to: 'failed',
@@ -214,8 +251,8 @@ describe('Workflow transition regressions', () => {
       await app.init();
       const input = { ...event, payload: { note: 'private-telemetry-payload' } };
 
-      await orchestrator.transit(input);
-      await orchestrator.transit(input);
+      await firstValueFrom(orchestrator.transit(input));
+      await firstValueFrom(orchestrator.transit(input));
 
       expect(logs).toEqual([
         {
@@ -250,8 +287,8 @@ describe('Workflow transition regressions', () => {
       });
       await app.init();
 
-      await expect(orchestrator.transit(event)).rejects.toBe(failure);
-      expect((await store.load(event.urn))?.state).toBe('failed');
+      await expect(firstValueFrom(orchestrator.transit(event))).rejects.toBe(failure);
+      expect((await firstValueFrom(store.load(event.urn)))?.state).toBe('failed');
     });
 
     test('rejects invalid payloads without running the handler or changing the state', async () => {
@@ -266,9 +303,11 @@ describe('Workflow transition regressions', () => {
       });
       await app.init();
 
-      await expect(orchestrator.transit({ ...event, payload: {} })).rejects.toBeInstanceOf(BadRequestException);
+      await expect(firstValueFrom(orchestrator.transit({ ...event, payload: {} }))).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
       expect(handlerCalls).toBe(0);
-      expect((await store.load(event.urn))?.state).toBe('pending');
+      expect((await firstValueFrom(store.load(event.urn)))?.state).toBe('pending');
     });
 
     test('replays a committed transition after evaluating the next transition fails', async () => {
@@ -299,21 +338,24 @@ describe('Workflow transition regressions', () => {
       });
       await app.init();
 
-      await expect(orchestrator.transit(event)).rejects.toBe(ruleError);
-      expect((await store.load(event.urn))?.state).toBe('review');
+      await expect(firstValueFrom(orchestrator.transit(event))).rejects.toBe(ruleError);
+      expect((await firstValueFrom(store.load(event.urn)))?.state).toBe('review');
 
       const replay = await createContext();
       await replay.app.init();
-      const result = await replay.orchestrator.transit({ ...event });
+      const result = await firstValueFrom(replay.orchestrator.transit({ ...event }));
       if (result.status !== 'continued') throw new Error(`Expected continuation, got ${result.status}`);
       expect(result.nextEvent).toMatchObject({ event: event.event, urn: event.urn, payload: output, attempt: 0 });
       expect(result.nextEvent.eventId).not.toBe(event.eventId);
       expect(effects).toBe(1);
 
-      await expect(replay.orchestrator.transit(result.nextEvent)).resolves.toEqual({ status: 'final', state: 'done' });
-      expect(await replay.orchestrator.transit({ ...event })).toEqual(result);
+      await expect(firstValueFrom(replay.orchestrator.transit(result.nextEvent))).resolves.toEqual({
+        status: 'final',
+        state: 'done',
+      });
+      expect(await firstValueFrom(replay.orchestrator.transit({ ...event }))).toEqual(result);
       expect(effects).toBe(2);
-      expect((await store.load(event.urn))?.state).toBe('done');
+      expect((await firstValueFrom(store.load(event.urn)))?.state).toBe('done');
     });
 
     test('preserves the handler error when recording permanent failure also fails', async () => {
@@ -329,7 +371,7 @@ describe('Workflow transition regressions', () => {
       await app.init();
 
       try {
-        await orchestrator.transit(event);
+        await firstValueFrom(orchestrator.transit(event));
       } catch (error) {
         expect(
           error === handlerError ||
@@ -351,9 +393,9 @@ describe('Workflow transition regressions', () => {
       });
       await app.init();
 
-      await expect(orchestrator.transit(event)).rejects.toBeInstanceOf(BadRequestException);
+      await expect(firstValueFrom(orchestrator.transit(event))).rejects.toBeInstanceOf(BadRequestException);
       expect(handlerCalls).toBe(0);
-      expect((await store.load(event.urn))?.state).toBe('pending');
+      expect((await firstValueFrom(store.load(event.urn)))?.state).toBe('pending');
     });
 
     test('accepts zero as a numeric idle state', async () => {
@@ -363,8 +405,8 @@ describe('Workflow transition regressions', () => {
       });
       await app.init();
 
-      expect(await orchestrator.transit(event)).toMatchObject({ status: 'idle', state: 0 });
-      expect((await store.load(event.urn))?.state).toBe(0);
+      expect(await firstValueFrom(orchestrator.transit(event))).toMatchObject({ status: 'idle', state: 0 });
+      expect((await firstValueFrom(store.load(event.urn)))?.state).toBe(0);
     });
 
     test('rejects a workflow at startup when a reachable event has no handler', async () => {
@@ -394,9 +436,9 @@ describe('Workflow transition regressions', () => {
       const peer = await createContext();
       await peer.app.init();
 
-      const first = orchestrator.transit(event);
+      const first = firstValueFrom(orchestrator.transit(event));
       await started.promise;
-      const deliveries = Promise.allSettled([first, peer.orchestrator.transit({ ...event })]);
+      const deliveries = Promise.allSettled([first, firstValueFrom(peer.orchestrator.transit({ ...event }))]);
       await setImmediate();
       release.resolve();
 
@@ -404,7 +446,7 @@ describe('Workflow transition regressions', () => {
       expect(original.status).toBe('fulfilled');
       expect(duplicate).toEqual({ status: 'rejected', reason: expect.any(ConflictException) });
       expect(effects).toBe(1);
-      expect((await store.load(event.urn))?.state).toBe('done');
+      expect((await firstValueFrom(store.load(event.urn)))?.state).toBe('done');
     });
 
     test('replays a completed self-transition without rerunning its action', async () => {
@@ -419,11 +461,13 @@ describe('Workflow transition regressions', () => {
       await app.init();
 
       const result = { status: 'idle', state: 'pending' };
-      expect(await orchestrator.transit(event)).toMatchObject(result);
-      expect(await orchestrator.transit({ ...event })).toMatchObject(result);
+      expect(await firstValueFrom(orchestrator.transit(event))).toMatchObject(result);
+      expect(await firstValueFrom(orchestrator.transit({ ...event }))).toMatchObject(result);
       expect(effects).toBe(1);
 
-      expect(await orchestrator.transit(createWorkflowEvent(event.event, event.urn))).toMatchObject(result);
+      expect(await firstValueFrom(orchestrator.transit(createWorkflowEvent(event.event, event.urn)))).toMatchObject(
+        result,
+      );
       expect(effects).toBe(2);
     });
 
@@ -434,7 +478,7 @@ describe('Workflow transition regressions', () => {
       const payloadMarker = 'private-order-details-test-marker';
 
       try {
-        await orchestrator.transit({ ...event, payload: { privateNote: payloadMarker } });
+        await firstValueFrom(orchestrator.transit({ ...event, payload: { privateNote: payloadMarker } }));
         expect(JSON.stringify(log.mock.calls)).not.toContain(payloadMarker);
       } finally {
         log.mockRestore();
@@ -456,7 +500,7 @@ describe('Workflow transition regressions', () => {
 
       await expect(run(durableInput(event), new MockDurableContext())).resolves.toMatchObject({ state: 'done' });
       expect(seenEventIds).toEqual([event.eventId, event.eventId]);
-      expect((await store.load(event.urn))?.state).toBe('done');
+      expect((await firstValueFrom(store.load(event.urn)))?.state).toBe('done');
     });
 
     test('preserves the handler error and stops retrying if releasing the claim fails', async () => {
@@ -470,16 +514,17 @@ describe('Workflow transition regressions', () => {
         },
       });
       const claimTransition = store.claimTransition.bind(store);
-      vi.spyOn(store, 'claimTransition').mockImplementation(async (urn, eventId) => {
-        const claim = await claimTransition(urn, eventId);
-        if (claim.kind !== 'acquired') return claim;
-        return {
-          ...claim,
-          release: async () => {
-            throw storageError;
-          },
-        };
-      });
+      vi.spyOn(store, 'claimTransition').mockImplementation((urn, eventId) =>
+        claimTransition(urn, eventId).pipe(
+          map((claim) => {
+            if (claim.kind !== 'acquired') return claim;
+            return {
+              ...claim,
+              release: () => throwError(() => storageError),
+            };
+          }),
+        ),
+      );
       await app.init();
       const run = DurableLambdaEventHandler(app, mockWithDurableExecution);
 
@@ -488,7 +533,7 @@ describe('Workflow transition regressions', () => {
         errors: [handlerError, storageError],
       });
       expect(attempts).toBe(1);
-      expect((await store.load(event.urn))?.state).toBe('pending');
+      expect((await firstValueFrom(store.load(event.urn)))?.state).toBe('pending');
     });
 
     test('persists failed only after the configured attempts are exhausted', async () => {
@@ -510,7 +555,7 @@ describe('Workflow transition regressions', () => {
 
       await expect(run(durableInput(event), new MockDurableContext())).rejects.toBe(lastError);
       expect(attemptsAtFailure).toEqual([3]);
-      expect((await store.load(event.urn))?.state).toBe('failed');
+      expect((await firstValueFrom(store.load(event.urn)))?.state).toBe('failed');
     });
 
     test('keeps the correct entity identity when two executions overlap', async () => {
@@ -523,7 +568,7 @@ describe('Workflow transition regressions', () => {
         },
       });
       await app.init();
-      const second = await store.create('order-b');
+      const second = await firstValueFrom(store.create('order-b'));
       const run = DurableLambdaEventHandler(app, mockWithDurableExecution);
 
       const firstRun = run(durableInput(event), new MockDurableContext());

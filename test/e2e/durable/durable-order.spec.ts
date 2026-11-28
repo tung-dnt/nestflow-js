@@ -1,3 +1,4 @@
+import { firstValueFrom, map, throwError } from 'rxjs';
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vite-plus/test';
 import { Test } from '@nestjs/testing';
 import { withDurableExecution, type DurableLambdaHandler } from '@aws/durable-execution-sdk-js';
@@ -59,10 +60,10 @@ describe('Durable Lambda Adapter — Order Workflow E2E', () => {
 
   describe('Happy Path', () => {
     test('should process order PENDING → PROCESSING → SHIPPED with callback between steps', async () => {
-      const order = await entityService.create();
+      const order = await firstValueFrom(entityService.create());
       order.items = [{ name: 'Widget', quantity: 1, price: 10 }];
       order.totalAmount = 10;
-      await entityService.update(order, OrderState.PENDING);
+      await firstValueFrom(entityService.update(order, OrderState.PENDING));
 
       const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler });
 
@@ -91,17 +92,17 @@ describe('Durable Lambda Adapter — Order Workflow E2E', () => {
         state: OrderState.SHIPPED,
       });
 
-      const updatedOrder = await entityService.load(order.id);
+      const updatedOrder = await firstValueFrom(entityService.load(order.id));
       expect(entityService.status(updatedOrder!)).toBe(OrderState.SHIPPED);
     });
   });
 
   describe('Idle State — Callback Wait', () => {
     test('should wait at idle state and resume on callback', async () => {
-      const order = await entityService.create();
+      const order = await firstValueFrom(entityService.create());
       order.items = [{ name: 'Widget', quantity: 1, price: 10 }];
       order.totalAmount = 10;
-      await entityService.update(order, OrderState.PENDING);
+      await firstValueFrom(entityService.update(order, OrderState.PENDING));
 
       const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler });
 
@@ -140,9 +141,9 @@ describe('Durable Lambda Adapter — Order Workflow E2E', () => {
     });
 
     test('keeps distinct callbacks separate when two executions receive the same initial delivery', async () => {
-      const order = await entityService.create();
+      const order = await firstValueFrom(entityService.create());
       order.items = [{ name: 'Widget', quantity: 1, price: 10 }];
-      await entityService.update(order, OrderState.PENDING);
+      await firstValueFrom(entityService.update(order, OrderState.PENDING));
       const delivery = {
         payload: {
           urn: order.id,
@@ -165,16 +166,16 @@ describe('Durable Lambda Adapter — Order Workflow E2E', () => {
       expect((await firstRun).getResult()).toMatchObject({ state: OrderState.SHIPPED });
       await secondCallback.sendCallbackSuccess(JSON.stringify({ event: OrderEvent.CANCELLED }));
       expect((await secondRun).getStatus()).toBe('FAILED');
-      expect(await entityService.load(order.id)).toMatchObject({ status: OrderState.SHIPPED });
+      expect(await firstValueFrom(entityService.load(order.id))).toMatchObject({ status: OrderState.SHIPPED });
     });
   });
 
   describe('Error Handling', () => {
     test('should return completed with FAILED state on unretriable error', async () => {
-      const order = await entityService.create();
+      const order = await firstValueFrom(entityService.create());
       order.items = [];
       order.totalAmount = 0;
-      await entityService.update(order, OrderState.PENDING);
+      await firstValueFrom(entityService.update(order, OrderState.PENDING));
 
       const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler });
 
@@ -194,13 +195,13 @@ describe('Durable Lambda Adapter — Order Workflow E2E', () => {
         state: OrderState.FAILED,
       });
 
-      const updatedOrder = await entityService.load(order.id);
+      const updatedOrder = await firstValueFrom(entityService.load(order.id));
       expect(entityService.status(updatedOrder!)).toBe(OrderState.FAILED);
     });
 
     test('should fail for event with no route', async () => {
-      const order = await entityService.create();
-      await entityService.update(order, OrderState.PROCESSING);
+      const order = await firstValueFrom(entityService.create());
+      await firstValueFrom(entityService.update(order, OrderState.PROCESSING));
 
       const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler });
 
@@ -212,14 +213,14 @@ describe('Durable Lambda Adapter — Order Workflow E2E', () => {
     });
 
     test('should use only the configured retry budget with the AWS SDK', async () => {
-      const order = await entityService.create();
+      const order = await firstValueFrom(entityService.create());
       const eventId = `${order.id}:ship`;
       const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler });
 
       const execution = await runner.run({ payload: { urn: order.id, eventId, initialEvent: retryEvent } });
 
       expect(execution.getStatus()).toBe('FAILED');
-      expect(await entityService.load(order.id)).toMatchObject({ status: OrderState.FAILED });
+      expect(await firstValueFrom(entityService.load(order.id))).toMatchObject({ status: OrderState.FAILED });
       expect(attemptedEventIds).toEqual([eventId, eventId, eventId]);
       expect(execution.getOperations().filter((operation) => operation.getType() === 'WAIT')).toHaveLength(2);
       expect(
@@ -230,19 +231,20 @@ describe('Durable Lambda Adapter — Order Workflow E2E', () => {
     });
 
     test('preserves the handler diagnostic when AWS serializes a claim release failure', async () => {
-      const order = await entityService.create();
+      const order = await firstValueFrom(entityService.create());
       const eventId = `${order.id}:ship`;
       const claimTransition = entityService.claimTransition.bind(entityService);
-      const claimSpy = vi.spyOn(entityService, 'claimTransition').mockImplementation(async (urn, id) => {
-        const claim = await claimTransition(urn, id);
-        if (claim.kind !== 'acquired') return claim;
-        return {
-          ...claim,
-          release: async () => {
-            throw new Error('Claim store unavailable');
-          },
-        };
-      });
+      const claimSpy = vi.spyOn(entityService, 'claimTransition').mockImplementation((urn, id) =>
+        claimTransition(urn, id).pipe(
+          map((claim) => {
+            if (claim.kind !== 'acquired') return claim;
+            return {
+              ...claim,
+              release: () => throwError(() => new Error('Claim store unavailable')),
+            };
+          }),
+        ),
+      );
 
       try {
         const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler });
@@ -251,7 +253,7 @@ describe('Durable Lambda Adapter — Order Workflow E2E', () => {
         expect(execution.getStatus()).toBe('FAILED');
         expect(execution.getError().errorMessage).toContain('Shipping service unavailable');
         expect(attemptedEventIds).toEqual([eventId]);
-        expect(await entityService.load(order.id)).toMatchObject({ status: OrderState.PENDING });
+        expect(await firstValueFrom(entityService.load(order.id))).toMatchObject({ status: OrderState.PENDING });
       } finally {
         claimSpy.mockRestore();
       }
@@ -260,9 +262,9 @@ describe('Durable Lambda Adapter — Order Workflow E2E', () => {
 
   describe('Cancellation', () => {
     test('should cancel order from PENDING state', async () => {
-      const order = await entityService.create();
+      const order = await firstValueFrom(entityService.create());
       order.items = [{ name: 'Widget', quantity: 1, price: 10 }];
-      await entityService.update(order, OrderState.PENDING);
+      await firstValueFrom(entityService.update(order, OrderState.PENDING));
 
       const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler });
 
@@ -286,9 +288,9 @@ describe('Durable Lambda Adapter — Order Workflow E2E', () => {
 
   describe('Operation Inspection', () => {
     test('should checkpoint each transit step', async () => {
-      const order = await entityService.create();
+      const order = await firstValueFrom(entityService.create());
       order.items = [{ name: 'Widget', quantity: 1, price: 10 }];
-      await entityService.update(order, OrderState.PENDING);
+      await firstValueFrom(entityService.update(order, OrderState.PENDING));
 
       const runner = new LocalDurableTestRunner<DurableWorkflowResult>({ handlerFunction: handler });
 

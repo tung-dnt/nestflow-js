@@ -18,26 +18,26 @@ import { OrchestratorService } from 'nestflow-js/core';
 
 #### `transit(event)`
 
-Processes one attempt of a workflow event. Does not schedule handler retries, even if the handler has `@WithRetry`.
+Returns a cold Observable. Each subscription runs one attempt, emits one result on success, and completes. Errors go to the subscriber. Handler retries are not scheduled, even with `@WithRetry`.
 
 ##### Signature
 
 ```typescript
-transit(params: IWorkflowEvent): Promise<TransitResult>
+transit(params: IWorkflowEvent): Observable<TransitResult>
 ```
 
-Takes an [`IWorkflowEvent`](/docs/api-reference/interfaces#iworkflowevent) with a stable `eventId`. Returns a [`TransitResult`](/docs/api-reference/adapters#transitresult) on success.
+Pass an [`IWorkflowEvent`](/docs/api-reference/interfaces#iworkflowevent) with a stable `eventId`. Subscribing again starts another attempt; a committed event uses its stored receipt instead of executing the handler again. Unsubscribing stops delivery to that observer, not work already started. Use `requestCancellation(event, urn)` for persisted workflow cancellation.
 
 #### `transitAttempt`
 
-Executes one attempt for an adapter. Use `canRetry: true` only when another handler attempt remains.
+Returns a cold Observable for one adapter attempt per subscription. Use `canRetry: true` only when another handler attempt remains.
 
 ```typescript
-transitAttempt(params: IWorkflowEvent, canRetry: false): Promise<TransitResult>;
+transitAttempt(params: IWorkflowEvent, canRetry: false): Observable<TransitResult>;
 transitAttempt(
 	params: IWorkflowEvent,
 	canRetry: boolean,
-): Promise<TransitResult | { status: 'retry' }>;
+): Observable<TransitResult | { status: 'retry' }>;
 ```
 
 | Outcome | Behavior |
@@ -49,15 +49,17 @@ transitAttempt(
 
 A busy claim raises `ConflictException` (HTTP 409). A missing entity, invalid event ID, unknown event, or invalid transition raises `BadRequestException`. If guards rule out an otherwise matching transition in an idle state, the attempt returns `idle` instead. Validation, guard, storage, and post-commit errors propagate without requesting a retry.
 
-To process a single event directly:
+Promise-based callers can subscribe and await the single result with `firstValueFrom`:
 
 ```typescript
-const result = await orchestrator.transit({
+import { firstValueFrom } from 'rxjs';
+
+const result = await firstValueFrom(orchestrator.transit({
 	event: 'order.submit',
 	urn: orderId,
 	eventId: commandId,
 	attempt: 0,
-});
+}));
 ```
 
 #### `getRetryConfig(event)`

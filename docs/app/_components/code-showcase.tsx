@@ -33,13 +33,14 @@ export class OrderWorkflow {
     label: 'Entity Service',
     lang: 'ts',
     code: `import type { IWorkflowEntity, TransitionClaim } from 'nestflow-js/core';
+import type { Observable } from 'rxjs';
 
 // The storage adapter claims the order before the handler runs.
 interface OrderEntityService extends IWorkflowEntity<Order, OrderState> {
   claimTransition(
     urn: string | number,
     eventId: string,
-  ): Promise<TransitionClaim<Order, OrderState>>;
+  ): Observable<TransitionClaim<Order, OrderState>>;
 
   // The claim's commit persists the state and event receipt atomically.
 }`,
@@ -51,19 +52,20 @@ const usageTabs = [
     label: 'Service',
     lang: 'ts',
     code: `import { OrchestratorService } from 'nestflow-js/core';
+import { firstValueFrom } from 'rxjs';
 
 @Injectable()
 export class OrderService {
   constructor(private orchestrator: OrchestratorService) {}
 
   async processPayment(orderId: string, eventId: string, payload: PaymentDto) {
-    const result = await this.orchestrator.transit({
+    const result = await firstValueFrom(this.orchestrator.transit({
       event: 'PAYMENT_RECEIVED',
       urn: orderId,
       eventId,
       payload,
       attempt: 0,
-    });
+    }));
 
     // result.status: 'final' | 'idle' | 'continued' | 'no_transition'
     return result;

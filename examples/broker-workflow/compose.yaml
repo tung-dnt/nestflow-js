@@ -1,0 +1,49 @@
+x-build: &build
+  context: ../..
+  dockerfile: examples/broker-workflow/Dockerfile
+
+services:
+  postgres:
+    build:
+      <<: *build
+      target: database
+    environment:
+      POSTGRES_USER: nestflow
+      POSTGRES_PASSWORD: nestflow
+      POSTGRES_DB: nestflow
+    healthcheck:
+      test: [CMD, pg_isready, -h, 127.0.0.1, -U, nestflow, -d, nestflow]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+  rabbitmq:
+    image: rabbitmq:4-alpine
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: nestflow
+      RABBITMQ_DEFAULT_PASS: nestflow
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, check_port_connectivity]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+  worker:
+    build: *build
+    environment:
+      AMQP_URL: amqp://nestflow:nestflow@rabbitmq:5672/%2F?heartbeat=15
+      DATABASE_URL: postgres://nestflow:nestflow@postgres:5432/nestflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    init: true
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  rabbitmq-data:

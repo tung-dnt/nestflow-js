@@ -1,3 +1,4 @@
+import { type Observable, defer, of } from 'rxjs';
 import { Injectable } from '@nestjs/common';
 import { InMemoryWorkflowEntity } from '../../fixtures/in-memory-workflow-entity';
 
@@ -33,18 +34,20 @@ export class DocumentEntityService extends InMemoryWorkflowEntity<Document, 'sta
     super('status');
   }
 
-  async create(): Promise<Document> {
-    const document: Document = {
-      id: `doc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      status: DocumentState.DRAFT,
-      title: '',
-      content: '',
-      documentType: 'contract',
-      approvers: [],
-      approvals: [],
-      revisionCount: 0,
-      createdAt: new Date().toISOString(),
-    };
-    return this.save(document);
+  create(): Observable<Document> {
+    return defer(() => {
+      const document: Document = {
+        id: `doc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        status: DocumentState.DRAFT,
+        title: '',
+        content: '',
+        documentType: 'contract',
+        approvers: [],
+        approvals: [],
+        revisionCount: 0,
+        createdAt: new Date().toISOString(),
+      };
+      return of(this.save(document));
+    });
   }
 }

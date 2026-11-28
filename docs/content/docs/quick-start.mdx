@@ -3,14 +3,14 @@ title: Quick Start
 description: Register an order workflow and submit an event with a stable ID.
 ---
 
-This guide registers an order workflow and submits its first event. To run the complete application with DynamoDB, use the [Lambda order state machine](https://github.com/tung-dnt/nestflow-js/tree/main/examples/lambda-order-state-machine).
+Run a complete order workflow in one Node process. This example uses an in-memory entity store and does not need cloud credentials or a database.
 
 ## Installation
 
 Use NestJS 12 with Node.js 22.12 or later. See the [NestJS 12 migration guide](https://docs.nestjs.com/migration-guide).
 
 ```bash
-pnpm add nestflow-js @nestjs/common@12 @nestjs/core@12 class-transformer@^0.5.1 class-validator@^0.14.2 reflect-metadata@^0.2.0 rxjs@^7.8.0
+pnpm add nestflow-js @nestjs/common@12 @nestjs/core@12 reflect-metadata@^0.2.0 rxjs@^7.8.0
 ```
 
 The TypeScript examples use ESM (`"type": "module"` in `package.json` and `"module": "NodeNext"` in `tsconfig.json`). Enable `experimentalDecorators` and `emitDecoratorMetadata` in `tsconfig.json`.
@@ -35,9 +35,26 @@ export interface Order {
 
 ## 2. Create an Entity Service
 
-Create `order-entity.service.ts` with a storage-backed `OrderEntityService` that implements `IWorkflowEntity<Order, OrderStatus>`. Its `claimTransition(urn, eventId)` method must acquire an exclusive claim or return the receipt for an event that already committed.
+Create `order-entity.service.ts`. The adapter owns claims and receipts. Your service chooses the initial state and ID.
 
-For a working implementation, see the [DynamoDB entity service](https://github.com/tung-dnt/nestflow-js/blob/main/examples/lambda-order-state-machine/src/order/order-entity.service.ts). See [entity service](/docs/concepts/entity-service) for the storage requirements.
+```typescript
+import { randomUUID } from 'node:crypto';
+import { InMemoryWorkflowEntity } from 'nestflow-js/adapter';
+import { defer, of, type Observable } from 'rxjs';
+import { OrderStatus, type Order } from './order.js';
+
+export class OrderEntityService extends InMemoryWorkflowEntity<Order, 'status'> {
+	constructor() {
+		super('status');
+	}
+
+	create(): Observable<Order> {
+		return defer(() => of(this.save({ id: randomUUID(), status: OrderStatus.Pending })));
+	}
+}
+```
+
+This store loses all orders on restart. Do not share a workflow across processes using this store. For durable runs, supply a [storage-backed entity service](/docs/concepts/entity-service).
 
 ## 3. Define a Workflow
 
@@ -106,36 +123,39 @@ export class OrderModule {}
 
 ## 5. Submit an event
 
-Create a pending order with ID `order-123` in your storage backend. Create `submit-order.ts` with the following code. In your application, use the ID of the command that submits the order and preserve that ID if you redeliver the event.
+Create `submit-order.ts`. In an application, use the ID of the command that submits the order. Reuse it if you redeliver the command.
 
 ```typescript
 import { NestFactory } from '@nestjs/core';
+import { runInProcess } from 'nestflow-js/adapter';
+import type { OrderEntityService } from './order-entity.service.js';
 import { OrchestratorService } from 'nestflow-js/core';
+import { firstValueFrom } from 'rxjs';
 import { OrderModule } from './order.module.js';
 
 const app = await NestFactory.createApplicationContext(OrderModule);
 try {
 	const orchestrator = app.get(OrchestratorService);
-	const result = await orchestrator.transit({
+	const order = await firstValueFrom(app.get<OrderEntityService>('entity.order').create());
+	const result = await firstValueFrom(runInProcess(orchestrator, {
 		event: 'order.submit',
-		urn: 'order-123',
+		urn: order.id,
 		eventId: 'submit-command-456',
 		attempt: 0,
-	});
-	if (result.status === 'continued') {
-		console.log(await orchestrator.transit(result.nextEvent));
-	}
+	}));
+	console.log(result);
 } finally {
 	await app.close();
 }
 ```
 
-Compile and run `submit-order.ts` with your NestJS project. The first call commits `Processing` and returns `continued` with an `order.complete` event. The second call prints `{ status: 'final', state: 'completed' }`.
+Compile and run `submit-order.ts` with your NestJS project. The runner follows `order.complete` and prints `{ status: 'final', state: 'completed' }`.
 
 If another transition holds the entity claim, the call raises `ConflictException` (HTTP 409). Requeue the same event with backoff instead of assigning a new ID. `transit()` itself does not retry.
 
 ## Next Steps
 
+- [Choose a deployment architecture](/docs/deployment-architecture)
 - [Introduction](/docs/introduction) — what NestflowJS is and when to use it
 - [Workflow Concepts](/docs/concepts/workflow-definition) — states, transitions, and events in depth
 - [TransitResult](/docs/api-reference/adapters#transitresult) — understand what `transit()` returns

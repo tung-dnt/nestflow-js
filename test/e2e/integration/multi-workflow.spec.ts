@@ -1,3 +1,4 @@
+import { firstValueFrom } from 'rxjs';
 import { Test, TestingModule } from '@nestjs/testing';
 import { afterEach, beforeEach, describe, expect, test } from 'vite-plus/test';
 import { WorkflowModule } from '@/core/workflow.module';
@@ -65,57 +66,59 @@ describe('Multi-Workflow Integration E2E', () => {
   describe('Multiple Workflows in Same Module', () => {
     test('should handle order and user onboarding workflows simultaneously', async () => {
       // Create order
-      const order = await orderEntityService.create();
+      const order = await firstValueFrom(orderEntityService.create());
       order.items = [{ name: 'Product 1', quantity: 1, price: 100 }];
-      await orderEntityService.update(order, OrderState.PENDING);
+      await firstValueFrom(orderEntityService.update(order, OrderState.PENDING));
 
       // Create user
-      const user = await userEntityService.create();
-      await userEntityService.update(user, OnboardingState.REGISTRATION);
+      const user = await firstValueFrom(userEntityService.create());
+      await firstValueFrom(userEntityService.update(user, OnboardingState.REGISTRATION));
 
       // Process order
-      await orchestrator.transit(createWorkflowEvent(OrderEvent.CREATED, order.id, { approved: true }));
-      let updatedOrder = await orderEntityService.load(order.id);
+      await firstValueFrom(orchestrator.transit(createWorkflowEvent(OrderEvent.CREATED, order.id, { approved: true })));
+      let updatedOrder = await firstValueFrom(orderEntityService.load(order.id));
       assertEntityState(updatedOrder!, orderEntityService, OrderState.PROCESSING);
 
       // Process user onboarding
-      await orchestrator.transit(createWorkflowEvent(OnboardingEvent.REGISTERED, user.id));
-      let updatedUser = await userEntityService.load(user.id);
+      await firstValueFrom(orchestrator.transit(createWorkflowEvent(OnboardingEvent.REGISTERED, user.id)));
+      let updatedUser = await firstValueFrom(userEntityService.load(user.id));
       assertEntityState(updatedUser!, userEntityService, OnboardingState.EMAIL_VERIFICATION);
 
       // Continue order processing
-      await orchestrator.transit(createWorkflowEvent(OrderEvent.PROCESSING, order.id));
-      updatedOrder = await orderEntityService.load(order.id);
+      await firstValueFrom(orchestrator.transit(createWorkflowEvent(OrderEvent.PROCESSING, order.id)));
+      updatedOrder = await firstValueFrom(orderEntityService.load(order.id));
       assertEntityState(updatedOrder!, orderEntityService, OrderState.SHIPPED);
 
       // Continue user onboarding
-      await orchestrator.transit(createWorkflowEvent(OnboardingEvent.EMAIL_VERIFIED, user.id));
-      updatedUser = await userEntityService.load(user.id);
+      await firstValueFrom(orchestrator.transit(createWorkflowEvent(OnboardingEvent.EMAIL_VERIFIED, user.id)));
+      updatedUser = await firstValueFrom(userEntityService.load(user.id));
       assertEntityState(updatedUser!, userEntityService, OnboardingState.PROFILE_SETUP);
     });
 
     test('should handle order, user, and payment workflows simultaneously', async () => {
       // Create entities
-      const order = await orderEntityService.create();
+      const order = await firstValueFrom(orderEntityService.create());
       order.items = [{ name: 'Product 1', quantity: 1, price: 100 }];
-      await orderEntityService.update(order, OrderState.PENDING);
+      await firstValueFrom(orderEntityService.update(order, OrderState.PENDING));
 
-      const user = await userEntityService.create();
-      await userEntityService.update(user, OnboardingState.REGISTRATION);
+      const user = await firstValueFrom(userEntityService.create());
+      await firstValueFrom(userEntityService.update(user, OnboardingState.REGISTRATION));
 
-      const payment = await paymentEntityService.create();
+      const payment = await firstValueFrom(paymentEntityService.create());
       payment.amount = 100;
-      await paymentEntityService.update(payment, PaymentState.INITIATED);
+      await firstValueFrom(paymentEntityService.update(payment, PaymentState.INITIATED));
 
       // Process all workflows
-      await orchestrator.transit(createWorkflowEvent(OrderEvent.CREATED, order.id, { approved: true }));
-      await orchestrator.transit(createWorkflowEvent(OnboardingEvent.REGISTERED, user.id));
-      await orchestrator.transit(createWorkflowEvent(PaymentEvent.INITIATED, payment.id, { amount: 100 }));
+      await firstValueFrom(orchestrator.transit(createWorkflowEvent(OrderEvent.CREATED, order.id, { approved: true })));
+      await firstValueFrom(orchestrator.transit(createWorkflowEvent(OnboardingEvent.REGISTERED, user.id)));
+      await firstValueFrom(
+        orchestrator.transit(createWorkflowEvent(PaymentEvent.INITIATED, payment.id, { amount: 100 })),
+      );
 
       // Verify all states
-      const updatedOrder = await orderEntityService.load(order.id);
-      const updatedUser = await userEntityService.load(user.id);
-      const updatedPayment = await paymentEntityService.load(payment.id);
+      const updatedOrder = await firstValueFrom(orderEntityService.load(order.id));
+      const updatedUser = await firstValueFrom(userEntityService.load(user.id));
+      const updatedPayment = await firstValueFrom(paymentEntityService.load(payment.id));
 
       assertEntityState(updatedOrder!, orderEntityService, OrderState.PROCESSING);
       assertEntityState(updatedUser!, userEntityService, OnboardingState.EMAIL_VERIFICATION);
@@ -125,40 +128,40 @@ describe('Multi-Workflow Integration E2E', () => {
 
   describe('Entity Service Isolation', () => {
     test('should maintain separate entity stores for different workflows', async () => {
-      const order = await orderEntityService.create();
-      const user = await userEntityService.create();
-      const payment = await paymentEntityService.create();
+      const order = await firstValueFrom(orderEntityService.create());
+      const user = await firstValueFrom(userEntityService.create());
+      const payment = await firstValueFrom(paymentEntityService.create());
 
       // Verify entities are in separate stores
-      expect(await orderEntityService.load(order.id)).toBeDefined();
-      expect(await userEntityService.load(user.id)).toBeDefined();
-      expect(await paymentEntityService.load(payment.id)).toBeDefined();
+      expect(await firstValueFrom(orderEntityService.load(order.id))).toBeDefined();
+      expect(await firstValueFrom(userEntityService.load(user.id))).toBeDefined();
+      expect(await firstValueFrom(paymentEntityService.load(payment.id))).toBeDefined();
 
       // Verify cross-store access fails
-      expect(await orderEntityService.load(user.id)).toBeNull();
-      expect(await userEntityService.load(order.id)).toBeNull();
-      expect(await paymentEntityService.load(order.id)).toBeNull();
+      expect(await firstValueFrom(orderEntityService.load(user.id))).toBeNull();
+      expect(await firstValueFrom(userEntityService.load(order.id))).toBeNull();
+      expect(await firstValueFrom(paymentEntityService.load(order.id))).toBeNull();
     });
   });
 
   describe('Concurrent Workflow Execution', () => {
     test('should handle concurrent transitions across different workflows', async () => {
-      const order = await orderEntityService.create();
+      const order = await firstValueFrom(orderEntityService.create());
       order.items = [{ name: 'Product 1', quantity: 1, price: 100 }];
-      await orderEntityService.update(order, OrderState.PENDING);
+      await firstValueFrom(orderEntityService.update(order, OrderState.PENDING));
 
-      const user = await userEntityService.create();
-      await userEntityService.update(user, OnboardingState.REGISTRATION);
+      const user = await firstValueFrom(userEntityService.create());
+      await firstValueFrom(userEntityService.update(user, OnboardingState.REGISTRATION));
 
       // Execute transitions concurrently
       await Promise.all([
-        orchestrator.transit(createWorkflowEvent(OrderEvent.CREATED, order.id, { approved: true })),
-        orchestrator.transit(createWorkflowEvent(OnboardingEvent.REGISTERED, user.id)),
+        firstValueFrom(orchestrator.transit(createWorkflowEvent(OrderEvent.CREATED, order.id, { approved: true }))),
+        firstValueFrom(orchestrator.transit(createWorkflowEvent(OnboardingEvent.REGISTERED, user.id))),
       ]);
 
       // Verify both workflows progressed
-      const updatedOrder = await orderEntityService.load(order.id);
-      const updatedUser = await userEntityService.load(user.id);
+      const updatedOrder = await firstValueFrom(orderEntityService.load(order.id));
+      const updatedUser = await firstValueFrom(userEntityService.load(user.id));
 
       assertEntityState(updatedOrder!, orderEntityService, OrderState.PROCESSING);
       assertEntityState(updatedUser!, userEntityService, OnboardingState.EMAIL_VERIFICATION);
@@ -167,50 +170,52 @@ describe('Multi-Workflow Integration E2E', () => {
 
   describe('Error Isolation', () => {
     test('should isolate errors between different workflows', async () => {
-      const order = await orderEntityService.create();
+      const order = await firstValueFrom(orderEntityService.create());
       order.items = []; // Empty items will cause error
-      await orderEntityService.update(order, OrderState.PENDING);
+      await firstValueFrom(orderEntityService.update(order, OrderState.PENDING));
 
-      const user = await userEntityService.create();
-      await userEntityService.update(user, OnboardingState.REGISTRATION);
+      const user = await firstValueFrom(userEntityService.create());
+      await firstValueFrom(userEntityService.update(user, OnboardingState.REGISTRATION));
 
       // Order workflow should fail
-      await orchestrator.transit(createWorkflowEvent(OrderEvent.CREATED, order.id, { approved: true }));
-      const failedOrder = await orderEntityService.load(order.id);
+      await firstValueFrom(orchestrator.transit(createWorkflowEvent(OrderEvent.CREATED, order.id, { approved: true })));
+      const failedOrder = await firstValueFrom(orderEntityService.load(order.id));
       assertEntityState(failedOrder!, orderEntityService, OrderState.FAILED);
 
       // User workflow should still work
-      await orchestrator.transit(createWorkflowEvent(OnboardingEvent.REGISTERED, user.id));
-      const updatedUser = await userEntityService.load(user.id);
+      await firstValueFrom(orchestrator.transit(createWorkflowEvent(OnboardingEvent.REGISTERED, user.id)));
+      const updatedUser = await firstValueFrom(userEntityService.load(user.id));
       assertEntityState(updatedUser!, userEntityService, OnboardingState.EMAIL_VERIFICATION);
     });
   });
 
   describe('Workflow Routing', () => {
     test('should route events to correct workflows based on topic', async () => {
-      const order = await orderEntityService.create();
+      const order = await firstValueFrom(orderEntityService.create());
       order.items = [{ name: 'Product 1', quantity: 1, price: 100 }];
-      await orderEntityService.update(order, OrderState.PENDING);
+      await firstValueFrom(orderEntityService.update(order, OrderState.PENDING));
 
-      const user = await userEntityService.create();
-      await userEntityService.update(user, OnboardingState.REGISTRATION);
+      const user = await firstValueFrom(userEntityService.create());
+      await firstValueFrom(userEntityService.update(user, OnboardingState.REGISTRATION));
 
       // Order event should only affect order workflow
-      await orchestrator.transit(createWorkflowEvent(OrderEvent.CREATED, order.id, { approved: true }));
+      await firstValueFrom(orchestrator.transit(createWorkflowEvent(OrderEvent.CREATED, order.id, { approved: true })));
 
       // User event should only affect user workflow
-      await orchestrator.transit(createWorkflowEvent(OnboardingEvent.REGISTERED, user.id));
+      await firstValueFrom(orchestrator.transit(createWorkflowEvent(OnboardingEvent.REGISTERED, user.id)));
 
       // Verify correct workflows were affected
-      const updatedOrder = await orderEntityService.load(order.id);
-      const updatedUser = await userEntityService.load(user.id);
+      const updatedOrder = await firstValueFrom(orderEntityService.load(order.id));
+      const updatedUser = await firstValueFrom(userEntityService.load(user.id));
 
       assertEntityState(updatedOrder!, orderEntityService, OrderState.PROCESSING);
       assertEntityState(updatedUser!, userEntityService, OnboardingState.EMAIL_VERIFICATION);
     });
 
     test('should throw error for unknown event topic', async () => {
-      await expect(orchestrator.transit(createWorkflowEvent('unknown.event' as any, 'test-id'))).rejects.toThrow();
+      await expect(
+        firstValueFrom(orchestrator.transit(createWorkflowEvent('unknown.event' as any, 'test-id'))),
+      ).rejects.toThrow();
     });
   });
 });

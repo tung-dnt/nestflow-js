@@ -1,3 +1,4 @@
+import { firstValueFrom } from 'rxjs';
 import { BadRequestException, type INestApplicationContext } from '@nestjs/common';
 import { OrchestratorService, RetryBackoff, type IWorkflowEvent, type TransitResult } from '@/core';
 import { randomUUID } from 'node:crypto';
@@ -99,10 +100,10 @@ class DurableLambdaWorkflowAdapter extends BaseWorkflowAdapter<IDurableContext, 
         async () => {
           const params = { ...currentEvent, attempt };
           if (!retryConfig || attempt + 1 === maxAttempts) {
-            return this.orchestrator.transitAttempt(params, false);
+            return firstValueFrom(this.orchestrator.transitAttempt(params, false));
           }
 
-          const result = await this.orchestrator.transitAttempt(params, true);
+          const result = await firstValueFrom(this.orchestrator.transitAttempt(params, true));
           return result.status === 'retry'
             ? { status: 'retry', delayMs: RetryBackoff.calculateDelay(attempt, retryConfig) }
             : result;

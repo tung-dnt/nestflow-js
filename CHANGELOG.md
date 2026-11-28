@@ -4,8 +4,15 @@
 - Retry only transient handler errors and persist terminal failure only after the last attempt.
 - Keep execution identity local to each run. Enforce global guards, support numeric state `0`, validate handlers at startup, and omit raw payloads from transition logs.
 - Require NestJS 12 and Node.js 22.12 or later.
-- Use Node.js 26 and pnpm for development and CI, with Vite+ for checks and tests. Run the Lambda example on Node.js 26.
+- Use Node.js 26 and pnpm for development and CI. Vite+ builds, checks, and tests the workspace packages and builds both runtime examples. Run the Lambda example on Node.js 26.
 - Remove the stale `nestflow-js/event-bus` export and verify package imports from the packed archive.
+- Add opt-in `@Payload(schema)` validation for Standard Schema v1, including Zod, Valibot, ArkType, and Joi 18. Handlers receive the parsed output of synchronous and asynchronous schemas.
+- Ship separate `@nestflow-js/validator-zod`, `@nestflow-js/validator-valibot`, `@nestflow-js/validator-arktype`, and `@nestflow-js/validator-joi` npm packages.
+- Add in-process and broker workflow adapters under `nestflow-js/adapter`, with RabbitMQ, Azure Service Bus, and Google Cloud Pub/Sub integrations. The deployment guide compares their recovery guarantees with Durable Lambda.
+- Breaking: `transit()` and `transitAttempt()` return cold RxJS Observables. Promise-based callers should use `firstValueFrom()`. Unsubscribing does not cancel persisted work.
+- Breaking: entity, claim, cancellation, and history ports now use cold, single-result Observables, as do Node workflow runners. Wrap Promise-based driver operations with `defer()`.
+- Breaking: remove `WorkflowRecoveryStore`, `recoverNextTransition()`, and `resumeCommitted()`. Broker adapters publish a continuation before acknowledging the inbound message, so redelivery replays the receipt instead of an outbox dispatcher.
+- Add the `WORKFLOW_HISTORY` port. The orchestrator builds each history entry, the entity service stores it in the receipt, and results carry it for durable checkpoints. Payloads are recorded only with `history: { payload: true }`.
 
 ## v0.1.15
 

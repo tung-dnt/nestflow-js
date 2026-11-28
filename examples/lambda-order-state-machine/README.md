@@ -174,7 +174,7 @@ Receipt keys use `transition#` and a hash of the order ID and event ID. They do 
 
 ### History and cancellation
 
-`OrderExecutionService` serves the `WORKFLOW_HISTORY` port from the durable execution itself, with no extra table or index. Each `transit:` step checkpoint holds the transition's history entry. `list(orderId, limit, cursor)` reads them with `GetDurableExecutionHistory`, and `cancel(orderId)` calls `StopDurableExecution`. Set `ORDER_WORKFLOW_FUNCTION` to the function name or ARN wherever you call them, and grant that caller `lambda:ListDurableExecutionsByFunction`, `lambda:GetDurableExecutionHistory`, and `lambda:StopDurableExecution`. Authorize the order before returning its history.
+`OrderExecutionService` serves the `WORKFLOW_HISTORY` port from the durable execution itself, with no extra table or index. Each `transit:` step checkpoint holds the transition's history entry. `list(orderId, limit, cursor)` reads them with `GetDurableExecutionHistory`, and `cancel(orderId)` calls `StopDurableExecution`; both return cold Observables. Set `ORDER_WORKFLOW_FUNCTION` to the function name or ARN wherever you call them, and grant that caller `lambda:ListDurableExecutionsByFunction`, `lambda:GetDurableExecutionHistory`, and `lambda:StopDurableExecution`. Authorize the order before returning its history.
 
 History lasts as long as the function's durable execution retention, 30 days in this stack. Copy entries elsewhere if you need them longer. `limit` caps durable history events per page, so a page can hold fewer entries. Entries omit event payloads unless the workflow sets `history: { payload: true }`.
 

@@ -8,11 +8,11 @@ Define business state and transitions. Keep your entities in a storage backend t
 ## Features
 
 - 🎯 **State Machine Engine**: Define workflows with states, transitions, and events
-- ⚡ **Serverless Optimized**: Built for AWS Lambda with durable execution support
+- **Runtime adapters**: Run the same workflow in a Node service, a RabbitMQ worker, AWS Durable Lambda, Azure Functions with Service Bus, or Cloud Run with Pub/Sub.
 - 🔄 **Durable Execution**: Checkpoint and replay workflows across Lambda invocations using AWS Durable Functions
 - 📦 **Tree-Shakable**: Subpath exports ensure minimal bundle sizes
 - 🛡️ **Type-Safe**: Full TypeScript support with comprehensive type definitions
-- 🔁 **Retry Logic**: The Durable Lambda adapter retries handler failures with configurable backoff
+- **Handler retries**: Configure retry attempts and backoff with `@WithRetry`.
 - 🎨 **Decorator-Based API**: Clean, declarative workflow definitions
 
 ## Installation
@@ -122,7 +122,7 @@ This is a breaking change. Upgrade event producers and entity services together.
 2. Supply a non-empty `eventId` for every `IWorkflowEvent` and initial `DurableWorkflowEvent`. Keep it unchanged across retries and redeliveries. Never use the same ID for different events on the same entity. Durable callback bodies still contain `{ event, payload }`. The adapter derives their IDs.
 3. Requeue a busy event with the same ID after backoff. The orchestrator raises `ConflictException` (HTTP 409). The Durable Lambda adapter does not treat a conflict, validation error, guard error, storage error, or post-commit error as a handler retry.
 4. Keep guards pure. Persist only serializable entity snapshots and handler output that are safe to store. Use `@EventId()` with the entity ID to deduplicate downstream side effects. A crash before commit can rerun the handler after the lease expires. Receipts deduplicate committed transitions and do not guarantee exactly-once side effects.
-5. Use `transit()` for a single attempt. A custom adapter that retries handlers must call `transitAttempt(event, canRetry)` and schedule another attempt only if it returns `{ status: 'retry' }`.
+5. Await `firstValueFrom(orchestrator.transit(event))` for a single attempt. A retry-aware custom adapter subscribes to `transitAttempt(event, canRetry)` and schedules another attempt only if it emits `{ status: 'retry' }`.
 
 Before you deploy the Durable Lambda replay changes, drain executions started on the old adapter or use versioning to keep them on that adapter until they finish. Do not replay their checkpoints with the new adapter.
 
@@ -131,6 +131,7 @@ Before you deploy the Durable Lambda replay changes, drain executions started on
 📚 **[Full Documentation](https://tung-dnt.github.io/nestflow-js/)**
 
 - [Quick Start](https://tung-dnt.github.io/nestflow-js/docs/quick-start)
+- [Choose a deployment architecture](https://nestflow.organit.dev/docs/deployment-architecture)
 - [Workflow Definition](https://tung-dnt.github.io/nestflow-js/docs/concepts/workflow-definition)
 - [Durable Lambda Adapter](https://tung-dnt.github.io/nestflow-js/docs/plugins/durable-lambda)
 - [API Reference](https://tung-dnt.github.io/nestflow-js/docs/api-reference/workflow-module)
@@ -143,7 +144,7 @@ The library is organized into tree-shakable subpath exports:
 ```
 nestflow-js/
 ├── core          # Core workflow engine (decorators, services, types, IWorkflowEvent)
-├── adapter       # BaseWorkflowAdapter + Durable Lambda adapter for checkpoint/replay execution
+├── adapter       # In-process, broker, and Durable Lambda adapters
 └── exception     # Custom exception types
 ```
 
@@ -153,8 +154,8 @@ nestflow-js/
 // Core workflow engine
 import { WorkflowModule, type IWorkflowEvent } from 'nestflow-js/core';
 
-// Adapter — base class + built-in durable Lambda adapter
-import { BaseWorkflowAdapter, DurableLambdaEventHandler } from 'nestflow-js/adapter';
+// Choose the execution model for your deployment.
+import { runInProcess, processWorkflowMessage, DurableLambdaEventHandler } from 'nestflow-js/adapter';
 
 // Exceptions
 import { UnretriableException } from 'nestflow-js/exception';
@@ -164,7 +165,7 @@ This ensures minimal bundle sizes and faster cold starts in serverless environme
 
 ## Transit Result
 
-On success, `transit()` returns one of these results:
+`transit()` returns a cold RxJS Observable. Each subscription starts an attempt and emits one of these results on success. Unsubscribing does not cancel a running attempt.
 
 ```typescript
 type TransitResult =
@@ -187,6 +188,7 @@ Extend `BaseWorkflowAdapter` to dispatch `TransitResult` variants in a loop. Imp
 
 Check out the [examples directory](https://github.com/tung-dnt/nestflow-js/tree/main/examples) for complete working examples:
 
+- [Broker workflow](examples/broker-workflow): One PostgreSQL-backed workflow with RabbitMQ, Azure Service Bus, and Google Cloud Pub/Sub bindings.
 - **[Lambda Order State Machine](https://github.com/tung-dnt/nestflow-js/tree/main/examples/lambda-order-state-machine/)**: Complete AWS Lambda example with DynamoDB and durable execution
 
 ## Key Concepts
